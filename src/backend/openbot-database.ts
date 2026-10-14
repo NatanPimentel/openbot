@@ -162,6 +162,10 @@ export class OpenBotDatabase {
     return this.#roster.unclaimedThreads();
   }
 
+  executionThreadIds(): Set<string> {
+    return this.#roster.executionThreadIds();
+  }
+
   latestRosterAgents(): unknown[] {
     return this.#roster.latestRosterAgents();
   }

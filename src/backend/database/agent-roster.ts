@@ -70,6 +70,7 @@ export class AgentRoster {
           `SELECT thread_id, agent_id FROM projection_threads
            WHERE thread_id NOT IN (SELECT thread_id FROM projection_agents WHERE thread_id IS NOT NULL)
              AND thread_id NOT IN (SELECT thread_id FROM projection_channel_contexts)
+             AND thread_id NOT IN (SELECT thread_id FROM projection_messaging_threads)
            ORDER BY thread_id`,
         )
         .all(),
@@ -77,6 +78,24 @@ export class AgentRoster {
       threadId: requiredStringColumn(row, "thread_id"),
       agentId: requiredStringColumn(row, "agent_id"),
     }));
+  }
+
+  /**
+   * The threads that a channel context or an external conversation owns. Each is an execution thread,
+   * never an agent's own chat: the runtime keeps a second snapshot for it, and a turn there ends only
+   * that snapshot.
+   */
+  executionThreadIds(): Set<string> {
+    return new Set(
+      databaseRows(
+        this.#core.connection
+          .prepare(
+            `SELECT thread_id FROM projection_channel_contexts
+             UNION SELECT thread_id FROM projection_messaging_threads`,
+          )
+          .all(),
+      ).map((row) => requiredStringColumn(row, "thread_id")),
+    );
   }
 
   /**
