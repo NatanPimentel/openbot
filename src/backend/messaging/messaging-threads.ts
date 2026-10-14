@@ -497,7 +497,8 @@ export class MessagingThreads {
   /**
    * Takes the conversation events of a messaging thread, so the agent's public chat and the Team
    * API never see them, and reports turn starts and ends. Approvals are not taken: the host still
-   * shows them.
+   * shows them. A thread that is also an agent's own chat (`ownChat`) keeps its events: the app and
+   * the Team API show that chat, with the messages of the external conversation in it.
    */
   event(event: AgentEvent, scope: Scope.Scope): boolean {
     switch (event.type) {

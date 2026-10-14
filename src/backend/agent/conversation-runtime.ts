@@ -476,7 +476,7 @@ export class ConversationRuntime {
     // Slack or Discord conversation too. With a second one, a write during a turn copied the turn
     // into the agent's snapshot, and the end of the turn cleared only the other: the agent's queue
     // then held every message until a restart.
-    if (this.#store.list().some((agent) => agent.threadId === threadId)) return;
+    if (this.#store.ownsThread(threadId)) return;
     if (!this.#executionSnapshots.has(threadId)) {
       const page = this.#store.database.readConversationPage(agentId, threadId, { type: "latest" }, 100);
       this.#setExecutionSnapshot(threadId, {

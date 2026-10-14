@@ -1346,6 +1346,11 @@ export class AgentStore {
     agent.updatedAt = updatedAt;
   }
 
+  /** Whether this thread is an agent's own chat. It copies no agent, so a hot path can ask it. */
+  ownsThread(threadId: string): boolean {
+    return this.#state.agents.some((agent) => agent.threadId === threadId);
+  }
+
   activeProviderSession(id: string): ProviderSession | null {
     const agent = this.#requireAgent(id);
     if (!agent.threadId) return null;
