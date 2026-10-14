@@ -1,4 +1,9 @@
-import type { AgentEvent, ConversationMessage, MessagingPlatform } from "@openbot/contracts/ipc";
+import type {
+  AgentEvent,
+  ConversationMessage,
+  MessagingPlatform,
+  RoutineResultConnectionOption,
+} from "@openbot/contracts/ipc";
 import { CONVERSATION_PLAN_ITEM_TYPE, MESSAGING_LIMITS } from "@openbot/contracts/ipc";
 import { sourceText } from "@openbot/i18n/source";
 import { Deferred, Effect, Result, Schema, type Scope } from "effect";
@@ -80,6 +85,13 @@ export interface MessagingHistory {
 }
 
 /**
+ * Why a post did not reach its place: the connection is removed or off (`gone`), it does not run now
+ * (`not-running`), it cannot post in that place (`refused`), or the post failed on its way and a part
+ * of a long text can be in the place already (`unknown`).
+ */
+export type MessagingPostFailure = "gone" | "not-running" | "refused" | "unknown";
+
+/**
  * What the platform side gives the outbound tools. Each answer is the result, or an error text
  * that is safe to show the agent.
  */
@@ -89,7 +101,7 @@ export interface MessagingOutbound {
     connectionId: string,
     target: MessageTarget,
     markdown: string,
-  ): Effect.Effect<{ posted: true } | { error: string }>;
+  ): Effect.Effect<{ posted: true } | { error: string; failure: Exclude<MessagingPostFailure, "gone"> }>;
 }
 
 export interface MessagingThreadsHooks {
@@ -109,6 +121,7 @@ const AGENT_QUEUE_LIMIT = 20;
 const AUTHOR_QUEUE_LIMIT = 2;
 const CONTEXT_TIMEOUT_MS = 5_000;
 const HISTORY_TIMEOUT_MS = 15_000;
+const FINISHED_TURN_LIMIT = 256;
 /** What a messaging tool answers when its connection does not run. */
 export const MESSAGING_NOT_RUNNING = "This connection does not run now.";
 const PLATFORM_NAMES: Record<MessagingPlatform, string> = { slack: "Slack", discord: "Discord", telegram: "Telegram" };
@@ -131,6 +144,11 @@ export class MessagingThreads {
   readonly #admissions = new Map<string, Deferred.Deferred<void>>();
   /** The external message each running turn answers, by turn id. */
   readonly #turnOrigins = new Map<string, { origin: MessagingOrigin | null; followUp: boolean }>();
+  /**
+   * The newest turns whose end the conversation was told of, so `deliverySettled` does not tell it a
+   * second time. Past the cap, the oldest goes.
+   */
+  readonly #finishedTurns = new Set<string>();
   #contextSource:
     | ((
         link: MessagingLink,
@@ -225,6 +243,53 @@ export class MessagingThreads {
             call.text,
           );
     return "error" in answer ? openBotToolFailure(answer.error) : openBotToolResult(answer);
+  });
+
+  /**
+   * A post that OpenBot sends on its own, such as a routine's answer, to the top level of one place.
+   * Only an enabled connection of this host can take it.
+   */
+  readonly deliver = Effect.fn("MessagingThreads.deliver")(function* (
+    this: MessagingThreads,
+    connectionId: string,
+    placeId: string,
+    markdown: string,
+  ): Effect.fn.Return<{ posted: true } | { failure: MessagingPostFailure }> {
+    if (!this.store.connection(connectionId)?.enabled) return { failure: "gone" };
+    const outbound = this.#outbound;
+    if (!outbound) return { failure: "not-running" };
+    const answer = yield* outbound.post(connectionId, { platformChannelId: placeId, replyThreadId: null }, markdown);
+    return "error" in answer ? { failure: answer.failure } : answer;
+  });
+
+  /** Each enabled connection with the places it can post in, for the routine editor. */
+  readonly destinationOptions = Effect.fn("MessagingThreads.destinationOptions")(function* (
+    this: MessagingThreads,
+  ): Effect.fn.Return<RoutineResultConnectionOption[]> {
+    const outbound = this.#outbound;
+    return yield* Effect.forEach(
+      this.store.connections().filter((record) => record.enabled),
+      (record) =>
+        (outbound
+          ? outbound.places(record.connectionId).pipe(
+              Effect.timeout(HISTORY_TIMEOUT_MS),
+              Effect.catch(() => Effect.succeed({ error: MESSAGING_NOT_RUNNING })),
+            )
+          : Effect.succeed({ error: MESSAGING_NOT_RUNNING })
+        ).pipe(
+          Effect.map((answer) => ({
+            connectionId: record.connectionId,
+            platform: record.platform,
+            connectionName: record.workspaceName.slice(0, MESSAGING_LIMITS.name),
+            places:
+              "places" in answer
+                ? answer.places.map((place) => ({ id: place.id, name: place.name.slice(0, MESSAGING_LIMITS.name) }))
+                : [],
+            placesFailed: "error" in answer,
+          })),
+        ),
+      { concurrency: "unbounded" },
+    );
   });
 
   /**
@@ -453,6 +518,14 @@ export class MessagingThreads {
         if (!link) return false;
         const started = this.#turnOrigins.get(event.turnId) ?? { origin: null, followUp: false };
         this.#turnOrigins.delete(event.turnId);
+        // A turn with no known requester tells no conversation, so `deliverySettled` still must.
+        if (started.origin) {
+          this.#finishedTurns.add(event.turnId);
+          if (this.#finishedTurns.size > FINISHED_TURN_LIMIT) {
+            const [oldest] = this.#finishedTurns;
+            if (oldest !== undefined) this.#finishedTurns.delete(oldest);
+          }
+        }
         this.store.touch(link.linkId);
         Effect.runFork(
           this.#finished(link, event.turnId, event.status, started.origin, started.followUp).pipe(
@@ -469,20 +542,44 @@ export class MessagingThreads {
 
   /** A messaging delivery that failed before its turn started ends like a failed turn. */
   deliveryFailed(deliveryId: string): void {
+    this.deliverySettled(deliveryId, "failed");
+  }
+
+  /**
+   * A messaging delivery that a path other than its turn's end settled: a failed start, a turn that
+   * ended before its start was read, or the recovery after a provider exit or a restart. Without
+   * this, the conversation keeps the "working" status and its Stop button, and gets no answer. A
+   * turn that the recovery found complete posts its answer, without its files.
+   */
+  deliverySettled(deliveryId: string, status: "completed" | "failed" | "interrupted"): void {
     const origin = this.#mailbox.messagingOrigin(deliveryId);
     const link = origin ? this.store.link(origin.linkId) : null;
     if (!origin || !link) return;
-    const followUp = this.#mailbox.getDelivery(deliveryId)?.delivery.sender.kind === "agent";
+    const delivery = this.#mailbox.getDelivery(deliveryId)?.delivery;
+    const turnId = delivery?.turnId ?? null;
+    if (turnId && this.#finishedTurns.has(turnId)) return;
+    if (turnId) this.#turnOrigins.delete(turnId);
+    const answer =
+      status === "completed" && turnId
+        ? ([...this.#turnMessages(link, turnId)].reverse().find(isAnswer)?.text ?? null)
+        : null;
     this.#publish({
       type: "finished",
       link,
-      turnId: null,
-      status: "failed",
+      turnId,
+      status,
       origin,
-      followUp,
-      answer: null,
+      followUp: delivery?.sender.kind === "agent",
+      answer,
       files: [],
     });
+  }
+
+  /** Whether a request from this external message still waits or runs. */
+  isPending(linkId: string, platformMessageId: string): boolean {
+    return this.#mailbox
+      .unresolvedMessagingDeliveries(linkId)
+      .some(({ delivery }) => this.#mailbox.messagingOrigin(delivery.id)?.platformMessageId === platformMessageId);
   }
 
   /** The requester of the turn that runs now in this link, if one runs. */

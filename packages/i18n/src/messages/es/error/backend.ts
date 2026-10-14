@@ -80,6 +80,10 @@ export const messages = {
   "error.backend.memoryOperationFailed": "Falló la operación de memoria. Inténtalo de nuevo.",
   "error.backend.memoryGone": "Este recuerdo ya no existe.",
   "error.backend.routineGone": "Esta rutina ya no existe.",
+  "error.backend.turnNotStarted": "El proveedor no inició este turno.",
+  "error.backend.routineResultConnectionOff":
+    "Esta conexión de mensajería está desactivada o eliminada. Elige otro lugar.",
+  "error.backend.routineResultNoDelivery": "Esta ejecución no tiene una respuesta para enviar de nuevo.",
   "error.backend.channelMemoryLimit": "Un canal puede tener hasta {limit} recuerdos.",
   "error.backend.channelRoutineLimit": "Un canal puede tener un máximo de {limit} rutinas.",
   "error.backend.agentRoutineLimit": "Un agente puede tener un máximo de {limit} rutinas.",
@@ -135,6 +139,7 @@ export const messages = {
     "Las programaciones personalizadas no deben ejecutarse con más frecuencia que cada {minutes} minutos.",
   "error.backend.routineAnchorInvalid": "El punto de inicio del intervalo de la rutina no es válido.",
   "error.backend.routineNoOccurrence": "La programación no tiene ninguna ejecución en los próximos cinco años.",
+  "error.backend.routineOncePassed": "La hora de esta rutina única ya pasó. Elige una fecha u hora posterior.",
   "error.backend.routineTimezoneInvalid": "La zona horaria de la rutina no es válida.",
   "error.backend.routineCronFields": "Las programaciones personalizadas deben usar cinco campos cron.",
   "error.backend.routineCronValueInvalid": "El valor cron {field} no es válido.",

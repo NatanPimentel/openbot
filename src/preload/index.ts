@@ -51,6 +51,7 @@ import {
 } from "@openbot/contracts/ipc";
 import {
   decodeEventActivity,
+  decodeEventRoutineRuns,
   decodeEventRoutines,
   decodeEventStatus,
   decodeSaveEventRoutineResult,
@@ -182,6 +183,11 @@ import {
 } from "./messaging-decoding";
 import { decodeProviderRuntimeSnapshot } from "./provider-runtime";
 import { decodeRoutineFlowCanvas, decodeRoutineFlowLink } from "./routine-flow-decoding";
+import {
+  decodeRoutineResultDeliveries,
+  decodeRoutineResultDestination,
+  decodeRoutineResultOptions,
+} from "./routine-result-decoding";
 import {
   decodeAgentInstallation,
   decodeAgentPublicationPreview,
@@ -576,6 +582,13 @@ const openbotApi: OpenBotDesktopApi = {
     disconnect: decodeVoid,
     updateLink: decodeRoutineFlowLink,
   }),
+  routineResults: bridgeGroup(IPC_ENDPOINTS.routineResults, {
+    options: decodeRoutineResultOptions,
+    destination: decodeRoutineResultDestination,
+    setDestination: decodeRoutineResultDestination,
+    deliveries: decodeRoutineResultDeliveries,
+    resend: decodeVoid,
+  }),
   voice: bridgeGroup(IPC_ENDPOINTS.voice, {
     getModelStatus: decodeVoiceModelStatus,
     getModelStatuses: decodeVoiceModelStatuses,
@@ -668,6 +681,9 @@ const openbotApi: OpenBotDesktopApi = {
     cancel: decodeOnePasswordConnectorStatus,
     disconnect: decodeOnePasswordConnectorStatus,
     changed: decodeOnePasswordConnectorStatus,
+    hostStatus: decodeOnePasswordConnectorStatus,
+    hostConnectWithToken: decodeOnePasswordConnectorStatus,
+    hostDisconnect: decodeOnePasswordConnectorStatus,
   }),
   routineFeed: bridgeGroup(IPC_ENDPOINTS.routineFeed, {
     get: decodeRoutineFeed,
@@ -1011,6 +1027,7 @@ const openbotApi: OpenBotDesktopApi = {
     testRoutine: decodeVoid,
     rotateSecret: decodeWebhookSecret,
     listActivity: decodeEventActivity,
+    listRoutineRuns: decodeEventRoutineRuns,
   }),
   // The shared contract decoder, as MCP does: it already bounds every row, and a remote answer was
   // decoded in main before it reached this point.

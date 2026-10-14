@@ -51,6 +51,7 @@ import {
   type FilePreview,
   type HostedSiteSummary,
   type HostStatus,
+  isReleasedRoutineSchedule,
   type MacPermissionId,
   normalizeMcpConfig,
   type OpenAttachmentInput,
@@ -130,6 +131,7 @@ import { createMockProviderRuntimes, type MockProviderRuntimeOptions } from "./m
 import { mockRoutineCalendar } from "./mock-routine-calendar";
 import { createMockRoutineFeed } from "./mock-routine-feed";
 import { mockRoutineFlows } from "./mock-routine-flows";
+import { type MockRoutineResultsOptions, mockRoutineResults } from "./mock-routine-results";
 import { applySidebarLayoutAction } from "./mock-sidebar-layout";
 import { createMockSkills, type MockSkillsOptions } from "./mock-skills";
 import { createMockStorage } from "./mock-storage";
@@ -144,7 +146,8 @@ export interface MockOpenBotOptions
     MockBrowserOptions,
     MockTeamOptions,
     MockSkillsOptions,
-    MockHostUpdateOptions {
+    MockHostUpdateOptions,
+    MockRoutineResultsOptions {
   appInfo?: AppInfo;
   analyticsPreference?: AnalyticsPreference;
   languagePreference?: AppLanguagePreference;
@@ -581,7 +584,11 @@ export function createMockOpenBot(options: MockOpenBotOptions = {}): MockOpenBot
   const { installedSkills, readInstalledSkills } = mockSkills;
   const mockBrowser = createMockBrowser(options, runtime, emitAgentEvent);
   const mockTeam = createMockTeam(options, runtime, emitAgentEvent, () => agents);
-  const mockEvents = createMockEvents();
+  const mockEvents = createMockEvents(({ owner, routineId, limit = 10 }) =>
+    owner.kind === "agent"
+      ? Promise.resolve(clone((routineRuns.get(routineId) ?? []).slice(0, limit)))
+      : mockChannels.listChannelRoutineRuns({ channelId: owner.id, routineId, limit }),
+  );
   const billingPlans = previewBillingServers();
 
   const api: OpenBotDesktopApi = {
@@ -788,6 +795,9 @@ export function createMockOpenBot(options: MockOpenBotOptions = {}): MockOpenBot
     routineFlows: mockRoutineFlows(
       { routines, routineRuns, links: options.routineFlowLinks, steps: options.routineFlowSteps },
       (agentId) => emitAgentEvent({ type: "routine-flows-changed", agentId }),
+    ),
+    routineResults: mockRoutineResults(routines, options, (agentId) =>
+      emitAgentEvent({ type: "routines-changed", agentId }),
     ),
     auth: mockAuth.auth,
     skills: mockSkills.skills,
@@ -1097,12 +1107,12 @@ export function createMockOpenBot(options: MockOpenBotOptions = {}): MockOpenBot
             name: skill.name,
             version: skill.installedVersion,
           })),
-          routines: (routines.get(agent.id) ?? []).map((routine) => ({
-            name: routine.name,
-            instruction: routine.instruction,
-            active: routine.active,
-            schedule: routine.trigger.schedule,
-          })),
+          // As on the host: a `once` routine names one date, so it is not part of a template.
+          routines: (routines.get(agent.id) ?? []).flatMap(({ name, instruction, active, trigger }) =>
+            isReleasedRoutineSchedule(trigger.schedule)
+              ? [{ name, instruction, active, schedule: trigger.schedule }]
+              : [],
+          ),
         });
       },
       submit: async (input) => {

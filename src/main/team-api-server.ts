@@ -49,6 +49,7 @@ import {
   MCP_SERVERS_CAPABILITY,
   MCP_SIGN_IN_APP_CAPABILITY,
   MCP_SIGN_IN_CAPABILITY,
+  ONEPASSWORD_CONNECTOR_CAPABILITY,
   PROVIDER_ACCOUNTS_CAPABILITY,
   PROVIDER_HOST_SIGN_IN_CAPABILITY,
   PROVIDERS_ADMIN_CAPABILITY,
@@ -59,6 +60,7 @@ import {
   PUSH_NOTIFICATIONS_CAPABILITY,
   QUIET_TURN_CAPABILITY,
   ROUTINE_FLOWS_CAPABILITY,
+  ROUTINE_RECOVERY_CAPABILITY,
   SHARED_TABLES_CAPABILITY,
   SIGN_IN_RELAY_CAPABILITY,
   SKILLS_ADMIN_CAPABILITY,
@@ -157,6 +159,7 @@ import { routeLiveActivityPush } from "./team-api/route-live-activity-push";
 import { routeMcpServers } from "./team-api/route-mcp";
 import { routeMcpSignIn } from "./team-api/route-mcp-sign-in";
 import { routeMcpSignInApp } from "./team-api/route-mcp-sign-in-app";
+import { routeOnePasswordConnector } from "./team-api/route-onepassword-connector";
 import { routeProviderAccounts } from "./team-api/route-provider-accounts";
 import { routeProviderHostSignIn } from "./team-api/route-provider-host-sign-in";
 import { routeProviders } from "./team-api/route-providers";
@@ -756,6 +759,7 @@ export class TeamApiServer {
       if ((await routeSignInRelay(context, this.#options.mcpServers && this.#options.signInRelay)) === "handled")
         return;
       if ((await routeConnectors(context, this.#options.connectors)) === "handled") return;
+      if ((await routeOnePasswordConnector(context, this.#options.onePasswordConnector)) === "handled") return;
       if ((await routeProviderHostSignIn(context, this.#options.providerHostSignIns)) === "handled") return;
       if ((await routeProviderAccounts(context, this.#options.providerAccounts)) === "handled") return;
       if ((await routeStorage(context, this.#options.storage)) === "handled") return;
@@ -1557,6 +1561,7 @@ export class TeamApiServer {
         if (capability === SIGN_IN_RELAY_CAPABILITY)
           return this.#options.mcpServers !== undefined && this.#options.signInRelay !== undefined;
         if (capability === CONNECTORS_CAPABILITY) return this.#options.connectors !== undefined;
+        if (capability === ONEPASSWORD_CONNECTOR_CAPABILITY) return this.#options.onePasswordConnector !== undefined;
         if (capability === PROVIDER_HOST_SIGN_IN_CAPABILITY) return this.#options.providerHostSignIns !== undefined;
         if (capability === PROVIDER_ACCOUNTS_CAPABILITY) return this.#options.providerAccounts !== undefined;
         if (capability === STORAGE_CAPABILITY) return this.#options.storage !== undefined;
@@ -1588,6 +1593,7 @@ export class TeamApiServer {
         if (capability === HOST_UPDATE_CAPABILITY || capability === HOST_MEMBER_UPDATE_CAPABILITY)
           return this.#options.admin?.update !== undefined;
         if (capability === EVENTS_CAPABILITY) return this.#options.events !== undefined;
+        if (capability === ROUTINE_RECOVERY_CAPABILITY) return this.#options.events !== undefined;
         if (capability === AGENT_IMPORT_CAPABILITY) return this.#options.agentImport !== undefined;
         if (capability === INSTANCE_TRANSFER_CAPABILITY) return this.#options.instanceTransfer !== undefined;
         if (capability === LIVE_ACTIVITY_PUSH_CAPABILITY) return this.#options.liveActivityPush !== undefined;

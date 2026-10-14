@@ -559,6 +559,11 @@ export class AgentService extends EventEmitter<AgentServiceEvents> {
           this.#attention.clearBrowserTakeovers(client);
           this.#attention.clearApprovals(client);
           this.#browser.clearControls();
+          Effect.runFork(
+            this.#turn
+              .interruptTurnsOf(client, { keepRecoverable: true })
+              .pipe(Effect.forkIn(this.#scope, { startImmediately: true })),
+          );
         },
         onClientStopped: (client) =>
           Effect.gen({ self: this }, function* () {
@@ -573,6 +578,7 @@ export class AgentService extends EventEmitter<AgentServiceEvents> {
             this.#attention.clearBrowserTakeovers(client);
             this.#attention.clearApprovals(client);
             this.#boot.orphanDeliveriesOfAgent(agentId);
+            yield* this.#turn.interruptTurnsOf(client, { keepRecoverable: true });
             // A teammate that asked this agent may hold the other answers until this work ends.
             const requesters = this.#mailbox
               .unresolvedDeliveries()
@@ -669,6 +675,7 @@ export class AgentService extends EventEmitter<AgentServiceEvents> {
         const agent = store.list().find((candidate) => candidate.id === agentId);
         return agent !== undefined && workspaceAccessEnforced(agent);
       },
+      messagingThread: (threadId) => this.messaging.store.linkForThread(threadId) !== null,
       emit: (event) => this.#emit(event),
       emitError: (code, error, agentId) => this.#emitError(code, error, agentId),
       emitRuntimeSnapshot: () => this.#emitRuntimeSnapshot(),
@@ -791,6 +798,7 @@ export class AgentService extends EventEmitter<AgentServiceEvents> {
             ? this.channels.store.context(assignment.channelId, assignment.agentId).threadId
             : this.messaging.threadForDelivery(deliveryId);
         },
+        deliverySettled: (deliveryId, terminal) => this.messaging.deliverySettled(deliveryId, terminal),
       },
     });
     this.channels = new ChannelService(store.database, mailbox, {
@@ -998,6 +1006,7 @@ export class AgentService extends EventEmitter<AgentServiceEvents> {
         isStopping: () => this.#stopping,
         servesModel: (model) => this.#endpoints.serves(model),
         requeueChannelDelivery: (deliveryId) => this.#requeueChannelDelivery(deliveryId),
+        turnEnded: (turnId) => this.#turn.hasEnded(turnId),
         followUsageLimit: (agentId) => {
           if (!this.#usageLimitMove(agentId)) return false;
           Effect.runFork(
@@ -1693,6 +1702,11 @@ export class AgentService extends EventEmitter<AgentServiceEvents> {
   /** The installed skills of one agent changed, so every open skills list reads them again. */
   notifySkillsChanged(agentId: string): void {
     this.#emit({ type: "skills-changed", agentId });
+  }
+
+  /** A routine result destination or delivery of one agent changed, so every routine editor reads it again. */
+  notifyRoutineResultsChanged(agentId: string): void {
+    this.#emit({ type: "routines-changed", agentId });
   }
 
   /** The routine canvas of one agent changed, so every view showing it reads it again. */

@@ -36,6 +36,7 @@ import { LIVE_ACTIVITY_PUSH_CAPABILITY } from "./live-activity-push-v1";
 import { MCP_SIGN_IN_APP_CAPABILITY } from "./mcp-sign-in-app-v1";
 import { MCP_SIGN_IN_CAPABILITY } from "./mcp-sign-in-v1";
 import { TEAM_MESSAGE_CLIENT_ID_CAPABILITY } from "./message-client-id-v1";
+import { ONEPASSWORD_CONNECTOR_CAPABILITY } from "./onepassword-connector-v1";
 import { PROVIDER_ACCOUNTS_CAPABILITY } from "./provider-accounts-v1";
 import { PROVIDER_HOST_SIGN_IN_CAPABILITY } from "./provider-host-sign-in-v1";
 import { PROVIDERS_ADMIN_CAPABILITY } from "./providers-v1";
@@ -47,6 +48,7 @@ import { PUSH_NOTIFICATIONS_CAPABILITY } from "./push-notifications-v1";
 import { TEAM_QUEUE_EDIT_CAPABILITY } from "./queue-edit-v1";
 import { QUIET_TURN_CAPABILITY } from "./quiet-turn-v1";
 import { ROUTINE_FLOWS_CAPABILITY } from "./routine-flows-v1";
+import { ROUTINE_RECOVERY_CAPABILITY } from "./routine-recovery-v1";
 import { SHARED_TABLES_CAPABILITY } from "./shared-tables-v1";
 import { SIGN_IN_RELAY_CAPABILITY } from "./sign-in-relay-v1";
 import { SKILLS_ADMIN_CAPABILITY } from "./skills-admin-v1";
@@ -100,6 +102,7 @@ export {
   MCP_SERVERS_CAPABILITY,
   MCP_SIGN_IN_APP_CAPABILITY,
   MCP_SIGN_IN_CAPABILITY,
+  ONEPASSWORD_CONNECTOR_CAPABILITY,
   PROVIDER_ACCOUNTS_CAPABILITY,
   PROVIDER_HOST_SIGN_IN_CAPABILITY,
   PROVIDERS_ADMIN_CAPABILITY,
@@ -110,6 +113,7 @@ export {
   PUSH_NOTIFICATIONS_CAPABILITY,
   QUIET_TURN_CAPABILITY,
   ROUTINE_FLOWS_CAPABILITY,
+  ROUTINE_RECOVERY_CAPABILITY,
   SHARED_TABLES_CAPABILITY,
   SIGN_IN_RELAY_CAPABILITY,
   SKILLS_ADMIN_CAPABILITY,
@@ -193,7 +197,9 @@ export const TEAM_CURRENT_CAPABILITIES = [
   TEAM_HISTORY_EXTENT_CAPABILITY,
   PUSH_NOTIFICATIONS_CAPABILITY,
   PROVIDER_ACCOUNTS_CAPABILITY,
+  ONEPASSWORD_CONNECTOR_CAPABILITY,
   HOST_TIMEZONE_CAPABILITY,
+  ROUTINE_RECOVERY_CAPABILITY,
 ] as const;
 
 export type TeamCurrentCapability = (typeof TEAM_CURRENT_CAPABILITIES)[number];
@@ -276,6 +282,9 @@ export const TEAM_BOOTSTRAP_CAPABILITIES = TEAM_CURRENT_CAPABILITIES.filter(
     capability !== TEAM_HISTORY_EXTENT_CAPABILITY &&
     capability !== PUSH_NOTIFICATIONS_CAPABILITY &&
     capability !== PROVIDER_ACCOUNTS_CAPABILITY &&
+    capability !== ONEPASSWORD_CONNECTOR_CAPABILITY &&
+    capability !== HOST_TIMEZONE_CAPABILITY &&
+    capability !== ROUTINE_RECOVERY_CAPABILITY &&
     capability !== INSTANCE_TRANSFER_CAPABILITY,
 );
 export function teamCapabilitiesForProtocol(protocol: number | null | undefined): readonly TeamCurrentCapability[] {
@@ -300,6 +309,9 @@ export function legacyTeamCapabilities(capabilities: readonly string[]): string[
       capability !== TEAM_HISTORY_EXTENT_CAPABILITY &&
       capability !== PUSH_NOTIFICATIONS_CAPABILITY &&
       capability !== PROVIDER_ACCOUNTS_CAPABILITY &&
+      capability !== ONEPASSWORD_CONNECTOR_CAPABILITY &&
+      capability !== HOST_TIMEZONE_CAPABILITY &&
+      capability !== ROUTINE_RECOVERY_CAPABILITY &&
       capability !== INSTANCE_TRANSFER_CAPABILITY,
   );
 }
