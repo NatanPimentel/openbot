@@ -1,12 +1,13 @@
 // Checks that a restart never makes the thread of a Discord or Slack conversation an agent's own chat,
-// and that an agent which an earlier build gave one gets it back with its history kept in place. Boots
-// the real agent store on a temporary profile three times: `bun scripts/messaging-thread-roster-e2e.ts`.
+// and that an agent which an earlier build gave one keeps it with one conversation snapshot. Boots the
+// real agent store on a temporary profile three times: `bun scripts/messaging-thread-roster-e2e.ts`.
 // Writes .openbot-build/messaging-thread-roster-e2e/report.json.
 import assert from "node:assert/strict";
 import { mkdirSync, writeFileSync } from "node:fs";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
+import { ConversationRuntime } from "../src/backend/agent/conversation-runtime";
 import { AgentStore } from "../src/backend/agent-store";
 import { runCauseEffect } from "../src/backend/effect-boundary";
 import { MessagingStore } from "../src/backend/messaging/messaging-store";
@@ -20,9 +21,10 @@ const home = join(root, "home");
 interface Report {
   messagingThreadId?: string;
   threadAfterRestart?: string | null;
-  threadAfterRepair?: string | null;
-  ownThreadAfterRepair?: string;
+  threadAfterRestartShared?: string | null;
   messagingThreadKept?: boolean;
+  sharedThreadIsExecution?: boolean;
+  otherThreadIsExecution?: boolean;
   passed: boolean;
 }
 
@@ -75,13 +77,33 @@ try {
   });
 
   await boot((store, database) => {
-    report.threadAfterRepair = store.list().find((agent) => agent.id === agentId)?.threadId ?? null;
-    assert.notEqual(report.threadAfterRepair, messagingThreadId, "The agent kept the messaging thread as its chat.");
-    report.ownThreadAfterRepair = store.ensureThreadIdNow(agentId);
-    assert.notEqual(report.ownThreadAfterRepair, messagingThreadId);
-    const link = new MessagingStore(database).linkForThread(messagingThreadId);
-    report.messagingThreadKept = link?.agentId === agentId;
+    // The agent keeps the thread: its chat history is there now.
+    report.threadAfterRestartShared = store.list().find((agent) => agent.id === agentId)?.threadId ?? null;
+    assert.equal(report.threadAfterRestartShared, messagingThreadId, "The agent lost the thread with its chat.");
+    const messaging = new MessagingStore(database);
+    report.messagingThreadKept = messaging.linkForThread(messagingThreadId)?.agentId === agentId;
     assert.ok(report.messagingThreadKept, "The messaging thread lost its link.");
+    const other = messaging.ensureLink({
+      connectionId: messaging.ensureConnection("discord", "guild-1", "Guild").connectionId,
+      agentId,
+      platformChannelId: "channel-1",
+      threadKey: "thread-2",
+      isDirect: false,
+      title: "#general · again",
+    });
+    // Boot recovery registers every conversation thread. The agent's own chat keeps one snapshot,
+    // so the end of a turn there clears the turn that holds the agent's queue.
+    const conversation = new ConversationRuntime(
+      store,
+      () => {},
+      () => store.list(),
+    );
+    for (const threadId of [messagingThreadId, other.threadId]) conversation.registerExecutionThread(agentId, threadId);
+    report.sharedThreadIsExecution = conversation.isExecutionThread(messagingThreadId);
+    report.otherThreadIsExecution = conversation.isExecutionThread(other.threadId);
+    assert.equal(report.sharedThreadIsExecution, false, "The agent's own chat got a second snapshot.");
+    assert.equal(report.otherThreadIsExecution, true, "A conversation thread lost its execution snapshot.");
+    conversation.dispose();
   });
 
   report.passed = true;

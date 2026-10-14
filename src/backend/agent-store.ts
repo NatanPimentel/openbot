@@ -1223,25 +1223,17 @@ export class AgentStore {
    * hide the first -- the same trade `#reconcileWorkspaceDirectory` makes for an ambiguous pair. That
    * also settles two threads naming one agent: the first in the ordering wins and the rest are reported.
    *
-   * The thread of a channel context or an external conversation is never adopted. Earlier builds
-   * adopted one when the agent had no chat of its own yet, so that thread became the agent's chat and an
-   * execution thread at once, and the first turn there that a routine or skill change touched held the
-   * agent's queue until a restart. Such an agent gives the thread back here and gets its own chat on
-   * the next use. The conversation stays in the external thread, where it was written.
+   * The thread of a channel context or an external conversation is never adopted: it is not the agent's
+   * own chat. An agent that an earlier build gave one keeps it, because its chat history is there now;
+   * `ConversationRuntime` keeps one snapshot for such a thread.
    *
    * The repair is one `#persist`, because `replaceAgents` runs `ensureThreadProjection` for every agent
    * that holds a thread, which is what rewrites the row's `agent_id` to the spelling the roster uses.
    * Nothing here may stop the app, so a thread this cannot place is counted and left alone.
    */
   #reconcileUnclaimedThreads(): void {
-    const executionThreads = this.#database.executionThreadIds();
-    let released = 0;
-    for (const agent of this.#state.agents) {
-      if (!agent.threadId || !executionThreads.has(agent.threadId)) continue;
-      agent.threadId = null;
-      released += 1;
-    }
     const unclaimed = this.#database.unclaimedThreads();
+    if (unclaimed.length === 0) return;
     let adopted = 0;
     for (const thread of unclaimed) {
       const agent = this.#agentByEitherSpelling(thread.agentId);
@@ -1249,7 +1241,7 @@ export class AgentStore {
       agent.threadId = thread.threadId;
       adopted += 1;
     }
-    if (released > 0 || adopted > 0) this.#persist("thread.reclaimed");
+    if (adopted > 0) this.#persist("thread.reclaimed");
     const stranded = unclaimed.length - adopted;
     if (stranded > 0) logger.warn("Threads remain that no agent claims.", stranded);
   }

@@ -81,24 +81,6 @@ export class AgentRoster {
   }
 
   /**
-   * The threads that a channel context or an external conversation owns. Each is an execution thread,
-   * never an agent's own chat: the runtime keeps a second snapshot for it, and a turn there ends only
-   * that snapshot.
-   */
-  executionThreadIds(): Set<string> {
-    return new Set(
-      databaseRows(
-        this.#core.connection
-          .prepare(
-            `SELECT thread_id FROM projection_channel_contexts
-             UNION SELECT thread_id FROM projection_messaging_threads`,
-          )
-          .all(),
-      ).map((row) => requiredStringColumn(row, "thread_id")),
-    );
-  }
-
-  /**
    * The agent list the newest roster event carries, for a roster projection that has lost its rows.
    *
    * `orchestration_events` is the source of truth and every roster write appends the whole list to one
