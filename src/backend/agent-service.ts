@@ -2321,6 +2321,11 @@ export class AgentService extends EventEmitter<AgentServiceEvents> {
       );
   });
 
+  /** Whether a turn's provider thread is the agent's own chat, not a channel's execution thread. */
+  #isOwnChatThread(agent: AgentSummary, threadId: string): boolean {
+    return this.#conversation.publicThreadId(agent.id, threadId) === agent.threadId;
+  }
+
   /** Tells or stops an agent whose tool call fails the same way again and again. Returns at once. */
   #guardToolStep(agentId: string, threadId: string, turnId: string, item: ThreadItem): void {
     const verdict = this.#loopGuard.observe(agentId, turnId, item, this.#loopGuardSettings());
@@ -2348,8 +2353,12 @@ export class AgentService extends EventEmitter<AgentServiceEvents> {
     verdict: LoopGuardVerdict,
   ) {
     const agent = this.#store.list().find((candidate) => candidate.id === agentId);
-    const session = agent ? this.#store.database.activeProviderSession(threadId, agent.provider) : null;
-    const client = agent ? this.#providers.clientForAgent(agent) : null;
+    if (!agent) return;
+    // The agent's own chat finds its session as the user's steer does; a channel thread by its ID.
+    const session = this.#isOwnChatThread(agent, threadId)
+      ? this.#store.activeProviderSession(agentId)
+      : this.#store.database.activeProviderSession(threadId, agent.provider);
+    const client = this.#providers.clientForAgent(agent);
     if (!session || !client) return;
     yield* client
       .request(
@@ -2377,7 +2386,7 @@ export class AgentService extends EventEmitter<AgentServiceEvents> {
     const agent = this.#store.list().find((candidate) => candidate.id === agentId);
     if (!agent) return;
     // A turn on a channel's thread is not the agent's own chat: stop it there, with no note here.
-    const ownThread = agent.threadId === threadId;
+    const ownThread = this.#isOwnChatThread(agent, threadId);
     yield* this.interrupt(agentId, turnId, ownThread ? undefined : threadId);
     logger.info(`The loop guard stopped a turn of agent ${agentId} after ${verdict.count} identical failures.`);
     if (!ownThread) return;
