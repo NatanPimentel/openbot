@@ -125,7 +125,8 @@ row, OpenBot puts a short note into the running turn: the call failed 3 times th
 agent must change its approach or say what blocks it. The same call means the same shell command,
 or the same tool with the same input. Numbers in the output, such as times and process IDs, do not
 make two failures different. The count ends when that call succeeds or fails with other output.
-Other calls between two tries do not end it.
+Other calls between two tries do not end it. The note is for the agent: the chat does not show it,
+also not after a restart.
 
 The note needs a provider that takes input during a turn: Codex, Claude, Pi or Muse. The ACP agents
 cannot take it, so for them only the stop below applies.

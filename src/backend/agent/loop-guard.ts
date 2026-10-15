@@ -157,10 +157,21 @@ function stableJson(value: unknown): string {
   );
 }
 
+/**
+ * The start of the note that goes into the turn. The provider keeps the note in its history as a
+ * user message with no delivery, so the history import finds it by this start and leaves it out.
+ */
+const LOOP_GUARD_NOTE_PREFIX = "[OpenBot loop guard] ";
+
+/** Whether a user message in provider history is the loop guard's note, not text the user wrote. */
+export function isLoopGuardNote(text: string): boolean {
+  return text.startsWith(LOOP_GUARD_NOTE_PREFIX);
+}
+
 /** The text that goes into the turn. The agent reads it as a note from OpenBot, not from the user. */
 export function loopGuardWarning(verdict: LoopGuardVerdict): string {
   return [
-    `[OpenBot loop guard] This call failed ${verdict.count} times in a row with the same result: ${verdict.call}`,
+    `${LOOP_GUARD_NOTE_PREFIX}This call failed ${verdict.count} times in a row with the same result: ${verdict.call}`,
     "Do not run it again unchanged. Read the error, try a different approach, or stop and tell the user what blocks you.",
   ].join("\n");
 }
