@@ -6,6 +6,8 @@ import assert from "node:assert/strict";
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
+import { type ConversationMessage, isLoopGuardStopMarker, LOOP_GUARD_STOP_ITEM_TYPE } from "@openbot/contracts/ipc";
+import { sourceText } from "@openbot/i18n/source";
 import { Effect } from "effect";
 import {
   DEFAULT_LOOP_GUARD_SETTINGS,
@@ -210,6 +212,24 @@ check(
   "a Write call with other content is another call",
   verdicts.every((verdict) => verdict === null),
   verdicts,
+);
+
+// The stop note is the system marker that the desktop chat draws and localizes (see the
+// "Loop guard stopped a turn" story), not an agent message.
+const stopMessage: ConversationMessage = {
+  id: "loop-guard-1",
+  turnId: "turn-1",
+  author: "system",
+  source: "system",
+  text: sourceText("status.agent.loopGuardStopped", { count: 6, call: "npm test" }),
+  createdAt: new Date().toISOString(),
+  status: "completed",
+  itemType: LOOP_GUARD_STOP_ITEM_TYPE,
+};
+check(
+  "the stop note is a loop guard stop marker",
+  isLoopGuardStopMarker(stopMessage) && !isLoopGuardStopMarker({ ...stopMessage, author: "assistant" }),
+  stopMessage,
 );
 
 const root = mkdtempSync(join(tmpdir(), "openbot-loop-guard-e2e-"));

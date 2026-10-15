@@ -142,8 +142,9 @@ ready (`curl -f` against a server that still starts) is correct. To change the g
 - `enabled`: `false` turns the guard off.
 - `warnAt`: identical failures in a row before the note, 2–1000.
 - `stopAt`: identical failures in a row before OpenBot stops the turn, 2–1000, or `null` (the
-  default) to never stop. A stopped turn gets a line in the chat that names the call. Send a new
-  message to continue.
+  default) to never stop. A stopped turn of the agent's own chat gets a note in the desktop chat, in
+  the app's language, that names the call. The mobile app does not show it yet. Send a new message
+  to continue.
 
 A value that is missing or out of range keeps its default.
 

@@ -97,6 +97,7 @@ import {
   DEFAULT_BUSY_MESSAGE_MODE,
   DEFAULT_PROVIDER_ACCOUNT_ID,
   isContextResetMarker,
+  LOOP_GUARD_STOP_ITEM_TYPE,
   MODEL_SWITCH_ITEM_TYPES,
   type ModelSwitchReason,
   type QueueSteerFallback,
@@ -2406,7 +2407,7 @@ export class AgentService extends EventEmitter<AgentServiceEvents> {
         text: sourceText("status.agent.loopGuardStopped", { count: verdict.count, call: redactText(verdict.call) }),
         createdAt: new Date().toISOString(),
         status: "completed",
-        itemType: "loop-guard",
+        itemType: LOOP_GUARD_STOP_ITEM_TYPE,
       };
       snapshot.messages.push(message);
       sortConversationMessages(snapshot.messages);
