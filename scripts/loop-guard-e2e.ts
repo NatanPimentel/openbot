@@ -13,6 +13,7 @@ import {
   type LoopGuardSettings,
   type LoopGuardVerdict,
   loopGuardWarning,
+  toolStep,
 } from "../src/backend/agent/loop-guard";
 import { toolUsage } from "../src/backend/agent/thread-items";
 import type { ThreadItem } from "../src/backend/protocol";
@@ -187,6 +188,29 @@ check("the warning names the command and the count", text.includes("npm test") &
 
 const usage = toolUsage(claudeBash(1));
 check("tool analytics see a failed Claude call", usage?.failed === true, usage);
+
+// Claude's Write holds the whole file: the guard keeps a hash of the call, not its input.
+const claudeWrite = (content: string): ThreadItem => ({
+  id: "toolu_write",
+  type: "toolCall",
+  name: "Write",
+  status: "failed",
+  arguments: { file_path: "/w/big.txt", content },
+  result: "EACCES: permission denied",
+});
+const bigFile = "x".repeat(1_000_000);
+const writeStep = toolStep(claudeWrite(bigFile));
+check("a call signature is a SHA-256 hash, not the call's input", /^[0-9a-f]{64}$/u.test(writeStep?.signature ?? ""), {
+  signatureLength: writeStep?.signature.length,
+});
+verdicts = run(times(3, () => claudeWrite(bigFile)));
+check("the same large Write call still warns at the third failure", verdicts.at(-1) === "warn", verdicts);
+verdicts = run([claudeWrite(bigFile), claudeWrite(`${bigFile}y`), claudeWrite(bigFile)]);
+check(
+  "a Write call with other content is another call",
+  verdicts.every((verdict) => verdict === null),
+  verdicts,
+);
 
 const root = mkdtempSync(join(tmpdir(), "openbot-loop-guard-e2e-"));
 try {

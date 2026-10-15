@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { isNumber, isString } from "@openbot/contracts/runtime-values";
 import { getArray, getString, isRecord, type ThreadItem } from "../protocol";
 
@@ -83,7 +84,10 @@ export class LoopGuard {
 }
 
 interface ToolStep {
-  /** What makes two calls the same call. */
+  /**
+   * What makes two calls the same call, as a SHA-256 hash: the input of a `Write` or `Edit` call
+   * holds a whole file, and a turn keeps up to 200 of them.
+   */
   signature: string;
   call: string;
   /** The normalized failure, or null when the call succeeded. */
@@ -102,7 +106,7 @@ export function toolStep(item: ThreadItem): ToolStep | null {
   const exitCode = isNumber(item.exitCode) ? item.exitCode : null;
   const failed = status === "failed" || (exitCode !== null && exitCode !== 0);
   return {
-    signature: identity.signature,
+    signature: createHash("sha256").update(identity.signature).digest("hex"),
     call: identity.call.length > CALL_TEXT ? `${identity.call.slice(0, CALL_TEXT - 1)}…` : identity.call,
     failure: failed ? `${exitCode ?? ""}|${normalizedOutput(item)}` : null,
   };
