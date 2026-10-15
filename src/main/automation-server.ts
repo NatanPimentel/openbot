@@ -3,7 +3,18 @@ import { chmod, mkdir, rm } from "node:fs/promises";
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
 import { join } from "node:path";
 import { INPUT_LIMITS } from "@openbot/contracts/input-limits";
-import { type AgentSummary, agentAutomationAllowed, type Routine, type RoutineRun } from "@openbot/contracts/ipc";
+import {
+  type AgentSummary,
+  agentAutomationAllowed,
+  isAgentModel,
+  isAgentProvider,
+  isProviderAccountId,
+  isReasoningEffort,
+  type QueueDelivery,
+  type Routine,
+  type RoutineRun,
+  type UpdateAgentInput,
+} from "@openbot/contracts/ipc";
 import { type DynamicRecord, isDynamicRecord, isString } from "@openbot/contracts/runtime-values";
 import { sourceText } from "@openbot/i18n/source";
 import { createOpenBotLogger, registerSecretValue, toLogValue } from "@openbot/logging";
@@ -27,7 +38,15 @@ const HOUR_MS = 60 * 60 * 1000;
 // A payload is at most 4,000 characters; four UTF-8 bytes each plus JSON escapes stay below this.
 const BODY_LIMIT_BYTES = 32 * 1024;
 const RUN_PATH = /^\/v1\/agents\/([^/]+)\/routines\/([^/]+)\/run$/;
-const AGENT_PATH = /^\/v1\/agents\/([^/]+)\/(messages|pending|prompts\/([^/]+)\/answer|approvals\/([^/]+)\/respond)$/;
+const AGENT_PATH =
+  /^\/v1\/agents\/([^/]+)\/(messages|pending|settings|deliveries\/([^/]+)|prompts\/([^/]+)\/answer|approvals\/([^/]+)\/respond)$/;
+/** A delivery in one of these states has no more work. Its turn's answer is final. */
+const ENDED_DELIVERY_STATUSES: ReadonlySet<QueueDelivery["status"]> = new Set([
+  "completed",
+  "failed",
+  "interrupted",
+  "cancelled",
+]);
 
 /** A start or close that failed. It is only logged; the next `sync` tries again. */
 class AutomationServerFailed extends Schema.TaggedError<AutomationServerFailed>()("AutomationServerFailed", {
@@ -35,6 +54,12 @@ class AutomationServerFailed extends Schema.TaggedError<AutomationServerFailed>(
 }) {}
 
 const { io: automationIO, rewrap: toAutomationServerFailed } = causeHelpers(AutomationServerFailed);
+
+/** The fields of an updated agent that a script reads back. */
+export type UpdatedAgent = Pick<
+  AgentSummary,
+  "id" | "name" | "provider" | "model" | "reasoningEffort" | "providerAccountId"
+>;
 
 export interface AutomationServerOptions {
   /** The folder that holds the URL and token files. Only the user can read it. */
@@ -52,6 +77,12 @@ export interface AutomationServerOptions {
   sendMessage: AgentService["sendMessage"];
   getLocalAttention: AgentService["getLocalAttention"];
   respondToLocalAttention: AgentService["respondToLocalAttention"];
+  /** A delivery by its ID, or null when it is gone. */
+  delivery: (deliveryId: string) => Pick<QueueDelivery, "recipientAgentId" | "status" | "turnId" | "error"> | null;
+  /** The answer an agent gave in one turn, or null when it gave none. */
+  turnAnswer: (agentId: string, turnId: string) => string | null;
+  /** The same update as the agent's settings. It refuses a provider or account change while the agent works. */
+  updateAgent: (input: UpdateAgentInput) => Effect.Effect<UpdatedAgent, { readonly cause: unknown }>;
 }
 
 /**
@@ -184,7 +215,13 @@ export class AutomationServer {
       if (agentMatch?.[1] && agentMatch[2]) {
         const agentId = decodePathPart(agentMatch[1]);
         if (agentId === null) return send(response, 404, { error: "not found" });
-        await this.#agentRequest(request, response, agentId, agentMatch[2], agentMatch[3] ?? agentMatch[4]);
+        await this.#agentRequest(
+          request,
+          response,
+          agentId,
+          agentMatch[2],
+          agentMatch[3] ?? agentMatch[4] ?? agentMatch[5],
+        );
         return;
       }
       const match = RUN_PATH.exec(path);
@@ -197,6 +234,7 @@ export class AutomationServer {
     } catch (error) {
       if (error instanceof HttpError) return send(response, error.status, { error: error.message });
       if (error instanceof InactiveAttentionRequest) return send(response, 409, { error: error.message });
+      if (error instanceof AgentUpdateRefused) return send(response, 409, { error: error.message });
       logger.warn("An automation request failed.", error);
       if (!response.headersSent) send(response, 500, { error: "internal error" });
     }
@@ -210,6 +248,12 @@ export class AutomationServer {
     encodedRequestId: string | undefined,
   ): Promise<void> {
     this.#requireAgent(agentId);
+    if (route.startsWith("deliveries/")) {
+      if (request.method !== "GET") return send(response, 405, { error: "method not allowed" });
+      const deliveryId = encodedRequestId === undefined ? null : decodePathPart(encodedRequestId);
+      if (!deliveryId) return send(response, 404, { error: "not found" });
+      return send(response, 200, this.#deliveryResult(agentId, deliveryId));
+    }
     if (route === "pending") {
       if (request.method !== "GET") return send(response, 405, { error: "method not allowed" });
       const pending = this.#options.getLocalAttention(agentId);
@@ -227,6 +271,26 @@ export class AutomationServer {
     const value = await readJson(request);
     // The setting can change while the script uploads its body.
     this.#requireAgent(agentId);
+    if (route === "settings") {
+      const input = agentSettingsInput(agentId, value);
+      let updated: UpdatedAgent;
+      try {
+        updated = await runCauseEffect(this.#options.updateAgent(input));
+      } catch (error) {
+        // The update throws a sentence for the user, such as "wait until the agent is idle".
+        if (error instanceof Error) throw new AgentUpdateRefused(error.message);
+        throw error;
+      }
+      logger.info(`A local script changed the settings of agent ${agentId}.`);
+      return send(response, 200, {
+        id: updated.id,
+        name: updated.name,
+        provider: updated.provider,
+        model: updated.model,
+        reasoningEffort: updated.reasoningEffort,
+        providerAccountId: updated.providerAccountId ?? null,
+      });
+    }
     if (route === "messages") {
       const text = requiredString(value, "text", INPUT_LIMITS.messageText);
       const clientMessageId = requiredString(value, "clientMessageId", INPUT_LIMITS.identifier);
@@ -249,6 +313,20 @@ export class AutomationServer {
       : { kind: "approval" as const, requestId, decision: approvalDecision(value.decision) };
     await runCauseEffect(this.#options.respondToLocalAttention(agentId, input));
     send(response, 200, { ok: true });
+  }
+
+  /** The state of one message delivery to this agent, and the turn's answer once the delivery ended. */
+  #deliveryResult(agentId: string, deliveryId: string) {
+    const delivery = this.#options.delivery(deliveryId);
+    if (!delivery || delivery.recipientAgentId !== agentId) throw new HttpError(404, "not found");
+    const ended = ENDED_DELIVERY_STATUSES.has(delivery.status);
+    return {
+      id: deliveryId,
+      status: delivery.status,
+      turnId: delivery.turnId,
+      error: delivery.error,
+      answer: ended && delivery.turnId ? this.#options.turnAnswer(agentId, delivery.turnId) : null,
+    };
   }
 
   #requireAgent(agentId: string, routine = false): void {
@@ -373,6 +451,33 @@ async function readJson(request: IncomingMessage): Promise<DynamicRecord> {
   }
   if (!isDynamicRecord(value)) throw new HttpError(400, "The request body must be an object.");
   return value;
+}
+
+/** A refusal from the agent update, for example while the agent works. Its message is for the user. */
+class AgentUpdateRefused extends Error {}
+
+/**
+ * The model and account fields of an update. Name, permissions and Local scripts itself stay in the
+ * app: a script can choose how an agent runs, not who it is or what it may do.
+ */
+function agentSettingsInput(agentId: string, value: DynamicRecord): UpdateAgentInput {
+  const { provider, model, reasoningEffort, providerAccountId, ...rest } = value;
+  if (Object.keys(rest).length > 0) throw new HttpError(400, `${Object.keys(rest)[0]} cannot be changed here.`);
+  if (provider !== undefined && !isAgentProvider(provider)) throw new HttpError(400, "provider is invalid.");
+  if (model !== undefined && !isAgentModel(model)) throw new HttpError(400, "model is invalid.");
+  if (reasoningEffort !== undefined && !isReasoningEffort(reasoningEffort))
+    throw new HttpError(400, "reasoningEffort is invalid.");
+  if (providerAccountId !== undefined && providerAccountId !== null && !isProviderAccountId(providerAccountId))
+    throw new HttpError(400, "providerAccountId is invalid.");
+  if (provider === undefined && model === undefined && reasoningEffort === undefined && providerAccountId === undefined)
+    throw new HttpError(400, "Send provider, model, reasoningEffort or providerAccountId.");
+  return {
+    agentId,
+    ...(provider === undefined ? {} : { provider }),
+    ...(model === undefined ? {} : { model }),
+    ...(reasoningEffort === undefined ? {} : { reasoningEffort }),
+    ...(providerAccountId === undefined ? {} : { providerAccountId }),
+  };
 }
 
 function requiredString(value: DynamicRecord, key: string, limit: number): string {

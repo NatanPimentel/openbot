@@ -204,6 +204,7 @@
     "test:remote-desktop-runtime": "bun scripts/remote-desktop-runtime-smoke.ts",
     "test:signal": "bun scripts/signal-security-e2e.ts",
     "test:ipc-input": "bun scripts/ipc-input-e2e.ts",
+    "test:automation-cli": "bun scripts/automation-cli-e2e.ts",
     "test:analytics-redaction": "bun scripts/analytics-redaction-e2e.ts",
     "codex:doctor": "bun scripts/codex-doctor.ts",
     "cua-driver:doctor": "bun scripts/cua-driver-doctor.ts",
