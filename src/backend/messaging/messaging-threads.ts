@@ -111,6 +111,11 @@ export interface MessagingThreadsHooks {
   interrupt(agentId: string, turnId: string, threadId: string): Effect.Effect<void, MessagingThreadFailed>;
   /** Removes live provider state for an execution thread before its rows are deleted. */
   forgetThread(threadId: string): Effect.Effect<void, MessagingThreadFailed>;
+  /**
+   * Whether this thread is also an agent's own chat, as an earlier build could make it. Its turns
+   * still go to the platform, but its events stay in the app, where the chat shows them.
+   */
+  ownChat(threadId: string): boolean;
 }
 
 /**
@@ -492,15 +497,16 @@ export class MessagingThreads {
   /**
    * Takes the conversation events of a messaging thread, so the agent's public chat and the Team
    * API never see them, and reports turn starts and ends. Approvals are not taken: the host still
-   * shows them.
+   * shows them. A thread that is also an agent's own chat (`ownChat`) keeps its events: the app and
+   * the Team API show that chat, with the messages of the external conversation in it.
    */
   event(event: AgentEvent, scope: Scope.Scope): boolean {
     switch (event.type) {
       case "conversation":
-        return event.snapshot.threadId !== null && this.store.linkForThread(event.snapshot.threadId) !== null;
+        return event.snapshot.threadId !== null && this.#takes(event.snapshot.threadId);
       case "conversation-delta":
       case "turn-progress":
-        return this.store.linkForThread(event.threadId) !== null;
+        return this.#takes(event.threadId);
       case "turn-started": {
         const link = this.store.linkForThread(event.threadId);
         if (!link) return false;
@@ -511,7 +517,7 @@ export class MessagingThreads {
         const followUp = running?.delivery.sender.kind === "agent";
         this.#turnOrigins.set(event.turnId, { origin, followUp });
         this.#publish({ type: "started", link, turnId: event.turnId, origin, followUp });
-        return true;
+        return !this.#hooks.ownChat(event.threadId);
       }
       case "turn-completed": {
         const link = this.store.linkForThread(event.threadId);
@@ -533,11 +539,16 @@ export class MessagingThreads {
             Effect.forkIn(scope, { startImmediately: true }),
           ),
         );
-        return true;
+        return !this.#hooks.ownChat(event.threadId);
       }
       default:
         return false;
     }
+  }
+
+  /** Whether an event of this thread is kept out of the app: a conversation thread that is no agent's own chat. */
+  #takes(threadId: string): boolean {
+    return this.store.linkForThread(threadId) !== null && !this.#hooks.ownChat(threadId);
   }
 
   /** A messaging delivery that failed before its turn started ends like a failed turn. */

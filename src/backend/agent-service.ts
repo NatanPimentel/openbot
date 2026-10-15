@@ -934,6 +934,7 @@ export class AgentService extends EventEmitter<AgentServiceEvents> {
         Boolean(this.#conversation.workingSnapshot(agentId)?.activeTurnId || this.#mailbox.nextQueued(agentId)),
       interrupt: (agentId, turnId, threadId) => this.interrupt(agentId, turnId, threadId).pipe(toMessagingThreadFailed),
       forgetThread: (threadId) => this.#forgetExecutionThread(threadId).pipe(toMessagingThreadFailed),
+      ownChat: (threadId) => this.#store.ownsThread(threadId),
     });
     this.#memoryHold = new MemoryHold({
       memory: hostMemory,

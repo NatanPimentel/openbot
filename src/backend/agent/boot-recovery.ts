@@ -91,7 +91,8 @@ export class BootRecovery {
       ...agents,
       ...(this.#hooks.executionThreads?.() ?? []).flatMap((context) => {
         const agent = agents.find((item) => item.id === context.id);
-        if (!agent) return [];
+        // A thread that is also the agent's own chat is in the list already.
+        if (!agent || agent.threadId === context.threadId) return [];
         this.#conversation.registerExecutionThread(agent.id, context.threadId);
         return [{ ...agent, threadId: context.threadId }];
       }),

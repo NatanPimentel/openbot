@@ -55,6 +55,11 @@ For Amazon ECS, see [AWS ECS](aws-ecs.md).
 
 The container publishes no port. OpenBot only connects out: to the account server, to the providers,
 and to Signal and TURN for remote use. The Team API listens on `127.0.0.1` in the container.
+The container does not serve a web interface. After `openbot login`, use
+[`openbot.run/app`](https://openbot.run/app) with the same account to select the server. A web
+client at your own origin is not included in this image. The
+[self-hosted account service](self-hosting.md#what-changes) is a separate deployment with its own
+client limits.
 
 ## Tags
 
@@ -92,7 +97,8 @@ mkdir openbot-data && sudo chown 1000:1000 openbot-data
 ```
 
 The data has your account session, your provider sign-ins and your conversations. Protect it as you
-protect a home folder. To back it up, stop the container and copy the volume.
+protect a home folder. To back it up, stop the container and copy the volume. An instance of
+`docker/instances` has commands for this, see [Backups](#backups).
 
 ## Commands
 
@@ -211,12 +217,152 @@ its env file keeps that tag and offers no update in the app. An instance made be
 `openbot-instance upgrade <name>` once. A container started with `docker/compose.yaml` or
 `docker run` has no request folders, so it offers no update in the app.
 
+### Backups
+
+`openbot-instance backup <name>` copies all of `/data` of an instance into one archive: the
+conversations, attachments, agents, routines, memories, skills, workspaces, `Shared` with the shared
+tables, both databases, the provider sign-ins and the keyring with its password. A restore of this
+archive gives back the same instance, with the same agent, conversation and memory IDs. It is not a
+[transfer](architecture/agents.md#instance-transfer), which adds agents with new IDs to another server.
+
+Set the folder of the backups in `instances/<name>.env`, then run the first backup as root:
+
+```sh
+echo OPENBOT_BACKUP_DIR=/var/backups/openbot >>/opt/openbot-docker/instances/main.env
+/opt/openbot-docker/instances/openbot-instance backup main --verify
+```
+
+| Setting | Use |
+| --- | --- |
+| `OPENBOT_BACKUP_DIR` | The folder of the backups. Each instance has the folder `<name>` in it. It must not be in the data of an instance, because a backup has the keys of the instance. Use another disk, or copy the folder to another computer. |
+| `OPENBOT_BACKUP_KEEP` | The number of complete backups to keep. The default is 7. An older backup is deleted only after a new one is complete, and with `--verify` only after the new one is verified. |
+| `OPENBOT_BACKUP_MAX_AGE` | Hours. When the newest complete backup is older, `backups` shows it as overdue and exits with 1. |
+| `OPENBOT_BACKUP_WORK` | The folder where `verify` unpacks a backup. The default is `/var/tmp`. It needs free space for the data, and the user of the data must be able to reach it. |
+
+A backup stops the container, waits until OpenBot closes its databases, writes the archive and starts
+the container again. The instance is offline while the archive is written. The output and the status
+show how long. A running turn stops, as on a restart. Each backup is a folder `<UTC time>` with:
+
+| File | Contents |
+| --- | --- |
+| `data.tar.zst` | `/data` without `lost+found`. With `gzip` (`data.tar.gz`) when the host has no `zstd`. |
+| `manifest.json` | The OpenBot version and image, the size, the checksum of the archive, the folders in `/data`, the stop and the time offline. |
+| `required.sha256` | The checksums of `openbot.db`, the keyring, its password and `agent-data.db`. |
+| `instance.env` | A copy of the env file of the instance. |
+| `SHA256SUMS` | The checksums of the other files. |
+| `verified.json` | The result of the last verification, when there is one. |
+
+The backup writes to `<UTC time>.partial` and renames the folder only when all files are written. A
+backup fails, and keeps the earlier backups, when a file cannot be read, the folder has less free space
+than the data uses, the copy stops, or the database or the keyring is missing.
+
+`openbot-instance verify <name> [<backup>]` checks the newest backup or the one given. It needs
+`sqlite3` 3.37 or later on the host. It compares the checksums, unpacks the archive into a temporary
+folder in `OPENBOT_BACKUP_WORK`, and checks that the database, the keyring and its password are there and
+are the files that were copied. It runs `PRAGMA integrity_check` on both databases, reads the schema
+version, counts agents, threads, messages, memories and shared tables, and finds shared tables whose
+owner is not an agent of the backup. Nothing in the folder runs: no routine starts and no message goes
+out. Root does not unpack the archive or open a database, because agents can change every file in
+`/data`. The user of the data does that, and `sqlite3` runs in `-safe` mode. Thus that user (UID 1000
+without user namespace remapping) can read the temporary folder until verification deletes it.
+Verification does not check each attachment file.
+
+`openbot-instance backups <name>` shows the backups and the last backup and verification, with the
+error when one failed. `--json` gives the same for a monitor, with `lastBackup` and `lastVerify` set to
+`ok`, `failed`, `running`, `stopped` or `none`. `stopped` means that the run ended without a result, for
+example when it was killed or the host restarted. It exits with 1 when the last backup or verification
+failed or stopped, or the newest backup is overdue. Root keeps the state in
+`/srv/openbot/<name>/backup-status`.
+
+A daily backup at 04:00, with a verification after it:
+
+```sh
+systemctl enable --now openbot-instance-backup@main.timer
+systemctl edit openbot-instance-backup@main.timer   # another time: OnCalendar= under [Timer]
+```
+
+The timer runs outside the container, so it also backs up an instance that does not work. `setup`
+installs the units. Backups, verifications, restores, updates, `up`, `down`, `restart` and `upgrade` of
+one instance take the same lock. One waits until the other ends, so none starts or stops the container
+while another runs.
+
+To restore, the instance must exist. For a new host, `create` it with the same name first.
+
+```sh
+openbot-instance restore main 20261014T040000Z --replace
+openbot-instance up main
+```
+
+`restore` checks the checksums and verifies the backup in a temporary folder before it stops the
+container. It uses the same checks and temporary space as `verify`, even if the backup was verified
+before. Thus `restore` also needs `sqlite3` 3.37 or later on the host. A failed verification keeps
+the target in its current state and its data unchanged. The verification status records the failure
+and keeps the last successful result. After verification, `restore` stops the container and unpacks
+the backup next to the data. Only when the archive is unpacked does it replace `/data`. When the
+instance has data, `restore` needs `--replace`, which deletes that data, so back it up first.
+Because the old data stays until the end, the disk of the instance needs free space for the data of
+the backup. When it has less, copy the old data to another disk, delete it from
+`/srv/openbot/<name>/data`, and restore into the empty folder.
+`restore` does not start the instance:
+
+- Start it only when the instance of the backup does not run anywhere else. Two copies would use the
+  same server identity and the same account session.
+- `restore` refuses a backup from a newer OpenBot than the image of the instance. Pull a newer image
+  first. An older OpenBot cannot open a database that a newer one migrated. Do not use a backup to go
+  back to an older version.
+- A newer OpenBot migrates the database on its first start. Back up the restored data again before you
+  upgrade when you want to keep the version that the backup had.
+- The provider sign-ins are in the backup. A provider can still ask for a new sign-in when its session
+  expired. The account session is in the backup too.
+
 ## Upgrades
 
 OpenBot does not update itself in a container. A new image replaces it. An instance of
 `docker/instances` can ask the host for that from the app, see
 [Updates from the app](#updates-from-the-app). Do not go back to an older tag: an older OpenBot cannot
 open a database that a newer one migrated, so it does not start.
+
+### Update automation
+
+`latest` follows the newest published release. The release workflow does not publish a floating
+minor tag such as `0.39`, or a separate `stable` tag. For a controlled upgrade, keep an exact
+version in your Compose file or `OPENBOT_TAG` in the instance env file.
+
+The [GitHub latest-release API](https://docs.github.com/en/rest/releases/releases#get-the-latest-release)
+is the machine-readable source for the newest full release. For example, this read-only command
+prints its tag:
+
+```sh
+gh api repos/nightly-labs/openbot/releases/latest --jq '.tag_name'
+```
+
+Automation can poll that metadata and download an image. Installation needs these checks:
+
+1. Read the release notes and check that the candidate is newer than the running version. Stop on
+   an API error or an unexpected tag. Do not substitute `latest` for a failed version lookup.
+2. Compare your deployment files with the files at the candidate release tag. Check
+   `docker/compose.yaml` and `docker/seccomp.json`. For an instance of `docker/instances`, check
+   the `docker/instances/` files too. These files can change between releases; there is no promise
+   that an old copy remains sufficient. Stop for operator review when they change. Keep local
+   settings.
+3. Pull the exact image tag and check its release version and architecture before replacing the
+   container. The release workflow publishes the GitHub release before the image tags, so a new
+   release can appear while its image is not available yet. A failed pull leaves installation pending.
+4. Back up the complete `/data` recovery unit, including the keyring and password file. For an
+   instance of `docker/instances`, run `openbot-instance backup <name> --verify`, see
+   [Backups](#backups). For a container from `docker/compose.yaml` or `docker run`, stop the
+   container, confirm that it stopped, and copy the volume, see [Data](#data). Keep the previous
+   complete backup.
+5. Replace the container with the chosen image and the same volume and runtime options. For an
+   instance of `docker/instances`, set `OPENBOT_TAG` in its env file and run
+   `openbot-instance upgrade <name>`. This command takes the lock of the instance, so no backup,
+   restore or update from the app runs at the same time. A manual replacement does not take the
+   lock. Check `openbot status` and the container log before the upgrade is reported as complete.
+
+An unattended image watcher does not perform these checks or make a consistent backup. Keep the
+installation step under operator control unless your own job implements them. A failed upgrade
+must not start an older image against the upgraded data. Recovery uses the complete backup with
+a compatible release, not an image-tag rollback of the live volume.
 
 ## Memory
 
@@ -300,3 +446,7 @@ does not use systemd.
   Podman, Kubernetes, rootless Docker, and hosts that restrict user namespaces with AppArmor, such as
   Ubuntu 23.10 or newer. On such a host, the container can need an AppArmor profile that permits
   `userns`.
+- Not tested: a Codex agent with Workspace only access in a container. Codex runs its commands in
+  bubblewrap, which mounts its root in a user namespace. The seccomp profile allows `mount` only with
+  `CAP_SYS_ADMIN` and always refuses `pivot_root`, and the `docker-default` AppArmor profile refuses
+  `mount`, so these commands can fail. An agent with Full access does not use bubblewrap.
