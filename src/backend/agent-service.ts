@@ -2321,18 +2321,23 @@ export class AgentService extends EventEmitter<AgentServiceEvents> {
       );
   });
 
-  /** Whether a turn's provider thread is the agent's own chat, not a channel's execution thread. */
-  #isOwnChatThread(agent: AgentSummary, threadId: string): boolean {
-    return this.#conversation.publicThreadId(agent.id, threadId) === agent.threadId;
+  /** Whether a public thread is the agent's own chat, not a channel's execution thread. */
+  #isOwnChatThread(agent: AgentSummary, publicThreadId: string): boolean {
+    return publicThreadId === agent.threadId;
   }
 
-  /** Tells or stops an agent whose tool call fails the same way again and again. Returns at once. */
+  /**
+   * Tells or stops an agent whose tool call fails the same way again and again. Returns at once.
+   * `threadId` is the provider's session ID, as in the item notification; the session lookup and
+   * the stop need the public thread ID that the session is bound to.
+   */
   #guardToolStep(agentId: string, threadId: string, turnId: string, item: ThreadItem): void {
     const verdict = this.#loopGuard.observe(agentId, turnId, item, this.#loopGuardSettings());
     if (!verdict) return;
+    const publicThreadId = this.#conversation.publicThreadId(agentId, threadId);
     const action = verdict.action === "stop" ? this.#stopLoopingTurn : this.#warnLoopingTurn;
     Effect.runFork(
-      action(agentId, threadId, turnId, verdict).pipe(
+      action(agentId, publicThreadId, turnId, verdict).pipe(
         Effect.catchCause((cause) =>
           Effect.sync(() => this.#emitError("loop_guard_failed", Cause.squash(cause), agentId)),
         ),
@@ -2348,16 +2353,16 @@ export class AgentService extends EventEmitter<AgentServiceEvents> {
   readonly #warnLoopingTurn = Effect.fn("AgentService.warnLoopingTurn")(function* (
     this: AgentService,
     agentId: string,
-    threadId: string,
+    publicThreadId: string,
     turnId: string,
     verdict: LoopGuardVerdict,
   ) {
     const agent = this.#store.list().find((candidate) => candidate.id === agentId);
     if (!agent) return;
     // The agent's own chat finds its session as the user's steer does; a channel thread by its ID.
-    const session = this.#isOwnChatThread(agent, threadId)
+    const session = this.#isOwnChatThread(agent, publicThreadId)
       ? this.#store.activeProviderSession(agentId)
-      : this.#store.database.activeProviderSession(threadId, agent.provider);
+      : this.#store.database.activeProviderSession(publicThreadId, agent.provider);
     const client = this.#providers.clientForAgent(agent);
     if (!session || !client) return;
     yield* client
@@ -2379,15 +2384,16 @@ export class AgentService extends EventEmitter<AgentServiceEvents> {
   readonly #stopLoopingTurn = Effect.fn("AgentService.stopLoopingTurn")(function* (
     this: AgentService,
     agentId: string,
-    threadId: string,
+    publicThreadId: string,
     turnId: string,
     verdict: LoopGuardVerdict,
   ) {
     const agent = this.#store.list().find((candidate) => candidate.id === agentId);
     if (!agent) return;
     // A turn on a channel's thread is not the agent's own chat: stop it there, with no note here.
-    const ownThread = this.#isOwnChatThread(agent, threadId);
-    yield* this.interrupt(agentId, turnId, ownThread ? undefined : threadId);
+    const ownThread = this.#isOwnChatThread(agent, publicThreadId);
+    // A turn that ended before the stop gets no stop request, and so no note and no log line.
+    if (!(yield* this.#requestInterrupt(agentId, turnId, ownThread ? undefined : publicThreadId))) return;
     logger.info(`The loop guard stopped a turn of agent ${agentId} after ${verdict.count} identical failures.`);
     if (!ownThread) return;
     const database = this.#store.database;
@@ -3489,10 +3495,19 @@ export class AgentService extends EventEmitter<AgentServiceEvents> {
   }, Effect.uninterruptible).bind(this);
 
   interrupt(agentId: string, turnId: string, executionThreadId?: string): Effect.Effect<void, AgentLifecycleFailed> {
+    return this.#requestInterrupt(agentId, turnId, executionThreadId).pipe(Effect.asVoid);
+  }
+
+  /** As `interrupt`, and whether a stop request was sent: `false` when the turn had already ended. */
+  #requestInterrupt(
+    agentId: string,
+    turnId: string,
+    executionThreadId?: string,
+  ): Effect.Effect<boolean, AgentLifecycleFailed> {
     return Effect.suspend(() => {
       if (!executionThreadId) this.#stoppedTurns.set(agentId, turnId);
       return this.#interruptTurn(agentId, turnId, executionThreadId);
-    }).pipe(Effect.asVoid);
+    });
   }
 
   /**
