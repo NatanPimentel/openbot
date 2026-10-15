@@ -125,17 +125,18 @@ async function startFakeModel() {
       const wanted = /CALL ([\w./-]+)/.exec(JSON.stringify(input[lastUser]))?.[1];
       const [serverName, toolName] = (wanted ?? "").split("/");
       const namespace = tools.find((tool) => tool.name === `mcp__${serverName}`);
+      const tool = called ? undefined : namespace?.tools?.find((entry) => entry.name === toolName);
       const send = (event: ModelEvent) =>
         response.write(`event: ${event.type}${NL}data: ${JSON.stringify(event)}${NL}${NL}`);
       response.writeHead(200, { "content-type": "text/event-stream" });
       send({ type: "response.created", response: { id: "r", status: "in_progress" } });
       const item: ModelItem =
-        !called && namespace?.tools?.some((tool) => tool.name === toolName)
+        tool && namespace?.name
           ? {
               type: "function_call",
               id: "fc",
               call_id: `call_${input.length}`,
-              name: toolName,
+              name: tool.name,
               namespace: namespace.name,
               arguments: "{}",
             }
