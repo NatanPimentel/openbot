@@ -15,6 +15,7 @@ const USAGE = `Usage:
   openbot-cli status <agent> <deliveryId> [--json]
   openbot-cli agent set-account <agent> <accountId|default> [--json]
   openbot-cli agent set-model <agent> <model> [--effort <effort>] [--provider <provider>] [--json]
+  openbot-cli agent new-chat <agent> [--json]
 
 <agent> is an agent ID or an agent name. Only agents with Local scripts on are found.
 A task of "-" is read from standard input.
@@ -254,6 +255,16 @@ async function main(positional, flags) {
   }
   if (command === "agent") {
     const [action, reference, value] = rest;
+    if (action === "new-chat") {
+      if (!reference || rest.length > 2) throw new CliError(USAGE, EXIT.usage);
+      const agent = await findAgent(target, reference);
+      await request(target, "POST", `/v1/agents/${encodeURIComponent(agent.id)}/context/clear`);
+      return {
+        result: { agent, cleared: true },
+        exitCode: EXIT.done,
+        text: `${agent.name}: new chat started. The agent forgets the chat above; its setup stays.`,
+      };
+    }
     if (!reference || !value || rest.length > 3) throw new CliError(USAGE, EXIT.usage);
     /** @type {Record<string, string>} */
     let body;

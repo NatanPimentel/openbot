@@ -16,6 +16,7 @@ import {
   type UpdateAgentInput,
 } from "@openbot/contracts/ipc";
 import { type DynamicRecord, isDynamicRecord, isString } from "@openbot/contracts/runtime-values";
+import { ContextResetBusyError } from "@openbot/contracts/team-protocol/context-reset-v1";
 import { sourceText } from "@openbot/i18n/source";
 import { createOpenBotLogger, registerSecretValue, toLogValue } from "@openbot/logging";
 import { RoutineInputError } from "@openbot/team-client/routine-schedule";
@@ -39,7 +40,7 @@ const HOUR_MS = 60 * 60 * 1000;
 const BODY_LIMIT_BYTES = 32 * 1024;
 const RUN_PATH = /^\/v1\/agents\/([^/]+)\/routines\/([^/]+)\/run$/;
 const AGENT_PATH =
-  /^\/v1\/agents\/([^/]+)\/(messages|pending|settings|deliveries\/([^/]+)|prompts\/([^/]+)\/answer|approvals\/([^/]+)\/respond)$/;
+  /^\/v1\/agents\/([^/]+)\/(messages|pending|settings|context\/clear|deliveries\/([^/]+)|prompts\/([^/]+)\/answer|approvals\/([^/]+)\/respond)$/;
 /** A delivery in one of these states has no more work. Its turn's answer is final. */
 const ENDED_DELIVERY_STATUSES: ReadonlySet<QueueDelivery["status"]> = new Set([
   "completed",
@@ -83,6 +84,8 @@ export interface AutomationServerOptions {
   turnAnswer: (agentId: string, turnId: string) => string | null;
   /** The same update as the agent's settings. It refuses a provider or account change while the agent works. */
   updateAgent: (input: UpdateAgentInput) => Effect.Effect<UpdatedAgent, { readonly cause: unknown }>;
+  /** The same as **New chat** in the agent's settings. It fails with `ContextResetBusyError` while the agent works. */
+  clearAgentContext: (agentId: string) => Effect.Effect<void, { readonly cause: unknown }>;
 }
 
 /**
@@ -235,6 +238,7 @@ export class AutomationServer {
       if (error instanceof HttpError) return send(response, error.status, { error: error.message });
       if (error instanceof InactiveAttentionRequest) return send(response, 409, { error: error.message });
       if (error instanceof AgentUpdateRefused) return send(response, 409, { error: error.message });
+      if (error instanceof ContextResetBusyError) return send(response, 409, { error: error.message });
       logger.warn("An automation request failed.", error);
       if (!response.headersSent) send(response, 500, { error: "internal error" });
     }
@@ -268,6 +272,12 @@ export class AutomationServer {
       });
     }
     if (request.method !== "POST") return send(response, 405, { error: "method not allowed" });
+    if (route === "context/clear") {
+      // No body: the agent is the whole request, and the busy refusal comes back as 409.
+      await runCauseEffect(this.#options.clearAgentContext(agentId));
+      logger.info(`A local script started a new chat with agent ${agentId}.`);
+      return send(response, 200, { ok: true });
+    }
     const value = await readJson(request);
     // The setting can change while the script uploads its body.
     this.#requireAgent(agentId);

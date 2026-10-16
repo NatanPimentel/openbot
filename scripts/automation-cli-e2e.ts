@@ -9,6 +9,7 @@ import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "nod
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import type { QueueDelivery, QueuedMessageReceipt, UpdateAgentInput } from "@openbot/contracts/ipc";
+import { ContextResetBusyError } from "@openbot/contracts/team-protocol/context-reset-v1";
 import { Effect } from "effect";
 import { AutomationServer, type UpdatedAgent } from "../src/main/automation-server";
 
@@ -37,6 +38,7 @@ const agents = [
 ];
 const deliveries = new Map<string, FakeDelivery>();
 const updates: UpdateAgentInput[] = [];
+const cleared: string[] = [];
 let busy = false;
 
 function deliveryState(
@@ -102,6 +104,11 @@ const server = new AutomationServer({
       ...(input.providerAccountId ? { providerAccountId: input.providerAccountId } : {}),
     };
     return Effect.succeed(agent);
+  },
+  clearAgentContext: (agentId) => {
+    if (busy) return Effect.fail({ cause: new ContextResetBusyError("Wait for the active turn to finish.") });
+    cleared.push(agentId);
+    return Effect.void;
   },
 });
 
@@ -201,9 +208,16 @@ try {
   await check("an invalid account ID is refused", ["agent", "set-account", "Ada", "../x"], 1, (run) => {
     return run.stderr.includes("providerAccountId is invalid.");
   });
+  await check("new-chat starts a new chat", ["agent", "new-chat", "Ada", "--json"], 0, (run) => {
+    return parsed(run).cleared === true && cleared.at(-1) === "agent-ada";
+  });
+  await check("new-chat needs exactly one agent", ["agent", "new-chat"], 2, (run) => run.stderr.includes("Usage:"));
   busy = true;
   await check("a refused update exits 1 with its reason", ["agent", "set-account", "Ada", "default"], 1, (run) => {
     return run.stderr.includes("Wait until the agent is idle.");
+  });
+  await check("new-chat while the agent works exits 1 with its reason", ["agent", "new-chat", "Ada"], 1, (run) => {
+    return run.stderr.includes("Wait for the active turn to finish.") && cleared.length === 1;
   });
   busy = false;
   await Effect.runPromise(server.stop());

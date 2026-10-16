@@ -1402,6 +1402,7 @@ export async function createApplicationServices({
     delivery: (deliveryId) => mailbox.getDelivery(deliveryId)?.delivery ?? null,
     turnAnswer: (agentId, turnId) => turnAnswer(agentId, turnId),
     updateAgent: (input) => service.updateAgent(input),
+    clearAgentContext: (agentId) => service.clearAgentContext(agentId),
   });
   service.on("event", (event) => {
     if (event.type === "agents-changed") Effect.runFork(automation.requestSync());

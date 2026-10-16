@@ -1,8 +1,8 @@
 # Local scripts API
 
 A script on the computer that runs OpenBot can send an agent a message, wait for its answer, run a
-routine, read pending questions and approvals, submit responses, and change the agent's model or
-provider account. Enable **Local scripts** for each agent that the integration needs. Use this API
+routine, read pending questions and approvals, submit responses, change the agent's model or
+provider account, and start a new chat with the agent. Enable **Local scripts** for each agent that the integration needs. Use this API
 for a local Slack bridge, to report a build result, or to give an agent a task from a terminal.
 
 ```sh
@@ -31,6 +31,7 @@ openbot-cli run "Ada" - --wait --json < task.md     # the task from standard inp
 openbot-cli status "Ada" <deliveryId>               # a delivery that an earlier run left
 openbot-cli agent set-account "Ada" <accountId>     # or "default" for the provider's own sign-in
 openbot-cli agent set-model "Ada" claude-opus-5-5 --effort high
+openbot-cli agent new-chat "Ada"                    # the agent forgets the chat; its setup stays
 ```
 
 `<agent>` is an agent ID or a name; case is ignored. Without `--wait`, `run` returns when the
@@ -172,6 +173,16 @@ successful response is `200` with `id`, `name`, `provider`, `model`, `reasoningE
 `providerAccountId`. Other fields, such as the name, permissions or Local scripts, give `400`: change
 them in OpenBot.
 
+### `POST /v1/agents/:agentId/context/clear`
+
+No body. This is the same as **New chat** in the agent's settings: the agent forgets the
+conversation, and its next turn starts a new provider session. The messages stay visible above a
+divider, and the instructions, model, tools, memories, workspace and browser do not change. Use it
+to give an agent a fresh context before a new task, so a long conversation is not sent again with
+each call. A successful response is `200 { "ok": true }`. While the agent works, or has messages in
+its queue, the answer is `409` with the reason; wait and retry. This request does not use the
+request limit.
+
 ### `GET /v1/agents/:agentId/pending`
 
 Poll this route for requests that need a person. No conversation history or browser content is
@@ -217,8 +228,8 @@ agent, an expired request, or a secret question cannot be answered through this 
 requests return `409`; refresh the pending list instead of retrying the old response.
 
 All request bodies have a 32 KiB limit. Messages and routine runs share the limit of 30 accepted
-requests per agent per hour, including message retries. Reads, attention responses and settings
-changes do not use that limit. Routine runs have no retry key; retrying a run can start it twice.
+requests per agent per hour, including message retries. Reads, attention responses, settings
+changes and new chats do not use that limit. Routine runs have no retry key; retrying a run can start it twice.
 
 ## Windows
 
@@ -241,6 +252,6 @@ Invoke-RestMethod -Method Post `
   `-H @headers`.
 - OpenBot logs the agent and the routine of each run, never the payload.
 - A process that runs as the same OS user can read the token. Turn the setting on only for agents
-  that you want such processes to message and control, including approval decisions and the
-  agent's model and provider account. A script cannot change the agent's permissions or turn Local
+  that you want such processes to message and control, including approval decisions, the
+  agent's model and provider account, and a new chat. A script cannot change the agent's permissions or turn Local
   scripts on.
