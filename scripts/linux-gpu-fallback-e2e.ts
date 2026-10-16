@@ -1,9 +1,10 @@
 // Runs the real Electron with the Linux GPU mode of `src/main/linux-gpu-mode.ts` (#992):
 // 1. A first start uses the GPU. A crash of the real GPU process (SIGSEGV) writes `gpu-crash.json`.
 // 2. The next start uses software rendering. `OPENBOT_DISABLE_GPU=0` uses the GPU again.
-// 3. A crash file from another Electron version does not count, and a clean quit removes the start file.
+// 3. A crash file from another Chromium major version does not count, and a clean quit removes the start file.
 // 4. A start that is killed before it is confirmed makes the next start use software rendering.
 // 5. `OPENBOT_DISABLE_GPU=1` uses software rendering and writes no start file.
+// 6. A server uses software rendering and writes no start file, also with `OPENBOT_DISABLE_GPU=0`.
 //
 // Run on a Linux desktop with a working GPU: bun scripts/linux-gpu-fallback-e2e.ts
 // It writes .openbot-build/linux-gpu-fallback-e2e/report.json and exits non-zero on a failure.
@@ -100,13 +101,13 @@ try {
   steps.push({ step: "OPENBOT_DISABLE_GPU=0", ready: launch.ready });
   await quit(launch);
 
-  // 3. A crash with another Electron version does not count. A clean quit confirms the start.
-  await writeFile(join(data, GPU_CRASH_FILE), JSON.stringify({ version: 1, electron: "0.0.0" }));
+  // 3. A crash with another Chromium major version does not count. A clean quit confirms the start.
+  await writeFile(join(data, GPU_CRASH_FILE), JSON.stringify({ version: 1, chromium: "0" }));
   launch = await start(data, 600_000);
   assert.deepEqual(launch.ready.mode, { hardwareAcceleration: true, reason: "default" });
   await quit(launch);
   assert.equal(existsSync(join(data, GPU_START_FILE)), false, "a clean quit removes the start file");
-  steps.push({ step: "crash from another Electron version", ready: launch.ready });
+  steps.push({ step: "crash from another Chromium major version", ready: launch.ready });
 
   // 4. A start that stops before it is confirmed (as with SIGTRAP in #992) turns off the GPU.
   const killed = join(root, "killed-start");
@@ -125,6 +126,15 @@ try {
   assert.deepEqual(launch.ready.mode, { hardwareAcceleration: false, reason: "environment-off" });
   assert.equal(existsSync(join(forced, GPU_START_FILE)), false);
   steps.push({ step: "OPENBOT_DISABLE_GPU=1", ready: launch.ready });
+  await quit(launch);
+
+  // 6. A server has no GPU: software rendering, and the environment value does not change it.
+  const server = join(root, "server");
+  launch = await start(server, 1_000, { OPENBOT_DISABLE_GPU: "0" }, ["--server"]);
+  assert.deepEqual(launch.ready.mode, { hardwareAcceleration: false, reason: "server" });
+  assert.equal(launch.ready.hardwareAccelerationEnabled, false);
+  assert.equal(existsSync(join(server, GPU_START_FILE)), false, "a server writes no start file");
+  steps.push({ step: "server", ready: launch.ready });
   await quit(launch);
   passed = true;
 } catch (cause) {
@@ -146,14 +156,19 @@ try {
 
 // The app's output goes to a log file, not to a pipe: a closed pipe makes a later write in the app
 // fail with EPIPE, and Electron shows that as an error dialog on the desktop.
-async function start(userData: string, confirmMs: number, environment: Record<string, string> = {}): Promise<Launch> {
+async function start(
+  userData: string,
+  confirmMs: number,
+  environment: Record<string, string> = {},
+  extraArguments: string[] = [],
+): Promise<Launch> {
   const { OPENBOT_DISABLE_GPU: _inherited, ...base } = withoutElectronRuntimeFlags(process.env);
   launchCount += 1;
   const readyFile = join(root, `ready-${launchCount}.json`);
   const log = openSync(join(OUT, `electron-${launchCount}.log`), "w");
   const child = spawn(
     electronPath,
-    [bundle, `--user-data=${userData}`, `--confirm-ms=${confirmMs}`, `--ready-file=${readyFile}`],
+    [bundle, `--user-data=${userData}`, `--confirm-ms=${confirmMs}`, `--ready-file=${readyFile}`, ...extraArguments],
     { env: { ...base, ...environment }, stdio: ["pipe", log, log] },
   );
   closeSync(log);

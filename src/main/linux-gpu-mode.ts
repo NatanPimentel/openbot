@@ -8,10 +8,12 @@
 // - `gpu-start.json` is written before the app is ready. It is removed when the app has run for
 //   `startConfirmMs`, or when it quits. If the file is there at the next start, that start stopped.
 // - `gpu-crash.json` is written when the GPU process crashes.
-// Either file keeps software rendering on at each later start with the same Electron version. A new
-// Electron version tries the GPU again, because a new Chromium can fix the driver problem.
+// Either file keeps software rendering on at each later start with the same Chromium major version.
+// A new Chromium major version tries the GPU again, because it can fix the driver problem. An Electron
+// patch release keeps the Chromium major version, so it does not make a failing computer stop again.
 // `OPENBOT_DISABLE_GPU=1` always uses software rendering. `OPENBOT_DISABLE_GPU=0` always uses the GPU.
-// The renderer sandbox stays on in all cases.
+// A server (`OPENBOT_SERVER=1` or a hosted server) runs under a virtual display with no GPU, so it
+// always uses software rendering. The renderer sandbox stays on in all cases.
 
 import { mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
@@ -20,8 +22,8 @@ import { createOpenBotLogger, toLogValue } from "@openbot/logging";
 import { app, type Details } from "electron";
 import { isMissingFileError } from "../backend/file-errors";
 
-export const GPU_START_FILE = "gpu-start.json";
-export const GPU_CRASH_FILE = "gpu-crash.json";
+const GPU_START_FILE = "gpu-start.json";
+const GPU_CRASH_FILE = "gpu-crash.json";
 const DEFAULT_START_CONFIRM_MS = 30_000;
 // `killed` and `clean-exit` are a quit or a kill from outside, not a driver failure.
 const GPU_FAILURE_REASONS: ReadonlySet<Details["reason"]> = new Set([
@@ -33,13 +35,14 @@ const GPU_FAILURE_REASONS: ReadonlySet<Details["reason"]> = new Set([
 
 const logger = createOpenBotLogger("linux-gpu");
 
-/** One GPU failure on this computer, with the Electron version that had it. */
-export interface GpuFailureRecord {
-  electron: string;
+/** One GPU failure on this computer, with the Chromium major version that had it. */
+interface GpuFailureRecord {
+  chromium: string;
 }
 
-export type LinuxGpuModeReason =
+type LinuxGpuModeReason =
   | "not-linux"
+  | "server"
   | "environment-off"
   | "environment-on"
   | "gpu-process-crash"
@@ -51,24 +54,26 @@ export interface LinuxGpuMode {
   reason: LinuxGpuModeReason;
 }
 
-export interface LinuxGpuModeInput {
+interface LinuxGpuModeInput {
   platform: NodeJS.Platform;
+  server: boolean;
   /** The value of `OPENBOT_DISABLE_GPU`. */
   disableGpu: string | undefined;
-  electronVersion: string;
+  chromiumMajor: string;
   crash: GpuFailureRecord | undefined;
   unfinishedStart: GpuFailureRecord | undefined;
 }
 
 /** Decides if this start uses hardware acceleration. It reads no files and changes nothing. */
-export function resolveLinuxGpuMode(input: LinuxGpuModeInput): LinuxGpuMode {
+function resolveLinuxGpuMode(input: LinuxGpuModeInput): LinuxGpuMode {
   if (input.platform !== "linux") return { hardwareAcceleration: true, reason: "not-linux" };
+  if (input.server) return { hardwareAcceleration: false, reason: "server" };
   if (input.disableGpu === "1") return { hardwareAcceleration: false, reason: "environment-off" };
   if (input.disableGpu === "0") return { hardwareAcceleration: true, reason: "environment-on" };
-  if (input.crash?.electron === input.electronVersion) {
+  if (input.crash?.chromium === input.chromiumMajor) {
     return { hardwareAcceleration: false, reason: "gpu-process-crash" };
   }
-  if (input.unfinishedStart?.electron === input.electronVersion) {
+  if (input.unfinishedStart?.chromium === input.chromiumMajor) {
     return { hardwareAcceleration: false, reason: "unfinished-start" };
   }
   return { hardwareAcceleration: true, reason: "default" };
@@ -81,6 +86,8 @@ export interface ConfigureLinuxGpuOptions {
    * ready. It must not write the start file: it would never remove it.
    */
   ownsInstance: boolean;
+  /** `OPENBOT_SERVER=1` or a hosted server: a virtual display with no GPU. */
+  server: boolean;
   startConfirmMs?: number;
 }
 
@@ -91,18 +98,19 @@ export interface ConfigureLinuxGpuOptions {
 export function configureLinuxGpu(options: ConfigureLinuxGpuOptions): LinuxGpuMode {
   const startPath = join(options.userDataPath, GPU_START_FILE);
   const crashPath = join(options.userDataPath, GPU_CRASH_FILE);
-  const electronVersion = process.versions.electron ?? "";
+  const chromiumMajor = process.versions.chrome?.split(".")[0] ?? "";
   const mode = resolveLinuxGpuMode({
     platform: process.platform,
+    server: options.server,
     disableGpu: process.env.OPENBOT_DISABLE_GPU,
-    electronVersion,
+    chromiumMajor,
     crash: process.platform === "linux" ? readGpuFailure(crashPath) : undefined,
     unfinishedStart: process.platform === "linux" ? readGpuFailure(startPath) : undefined,
   });
   if (mode.reason === "not-linux") return mode;
   if (!mode.hardwareAcceleration) {
     app.disableHardwareAcceleration();
-    if (mode.reason !== "environment-off") {
+    if (mode.reason === "gpu-process-crash" || mode.reason === "unfinished-start") {
       logger.warn(
         `Software rendering is on because the GPU failed before (${mode.reason}). ` +
           `Remove ${mode.reason === "gpu-process-crash" ? crashPath : startPath} or set OPENBOT_DISABLE_GPU=0 to try the GPU again.`,
@@ -111,14 +119,14 @@ export function configureLinuxGpu(options: ConfigureLinuxGpuOptions): LinuxGpuMo
     return mode;
   }
   if (!options.ownsInstance) return mode;
-  writeGpuFailure(startPath, electronVersion);
+  writeGpuFailure(startPath, chromiumMajor);
   const confirmStart = () => removeFile(startPath);
   void app.whenReady().then(() => setTimeout(confirmStart, options.startConfirmMs ?? DEFAULT_START_CONFIRM_MS));
   app.once("will-quit", confirmStart);
   app.on("child-process-gone", (_event, details) => {
     if (details.type !== "GPU" || !GPU_FAILURE_REASONS.has(details.reason)) return;
     logger.warn(`The GPU process stopped (${details.reason}, exit code ${details.exitCode}).`);
-    writeGpuFailure(crashPath, electronVersion);
+    writeGpuFailure(crashPath, chromiumMajor);
   });
   return mode;
 }
@@ -133,18 +141,18 @@ function readGpuFailure(path: string): GpuFailureRecord | undefined {
   }
   try {
     const parsed = JSON.parse(text);
-    if (!isDynamicRecord(parsed) || parsed.version !== 1 || !isString(parsed.electron)) return undefined;
-    return { electron: parsed.electron };
+    if (!isDynamicRecord(parsed) || parsed.version !== 1 || !isString(parsed.chromium)) return undefined;
+    return { chromium: parsed.chromium };
   } catch {
     return undefined;
   }
 }
 
 // Synchronous: the first write runs before the app is ready, and a crash can stop the process soon after.
-function writeGpuFailure(path: string, electronVersion: string): void {
+function writeGpuFailure(path: string, chromiumMajor: string): void {
   try {
     mkdirSync(dirname(path), { recursive: true, mode: 0o700 });
-    writeFileSync(path, JSON.stringify({ version: 1, electron: electronVersion }));
+    writeFileSync(path, JSON.stringify({ version: 1, chromium: chromiumMajor }));
   } catch (error) {
     logger.warn(`Unable to write ${path}:`, toLogValue(error));
   }

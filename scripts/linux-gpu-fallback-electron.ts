@@ -20,6 +20,7 @@ app.setPath("userData", userDataPath);
 const mode = configureLinuxGpu({
   userDataPath,
   ownsInstance: true,
+  server: process.argv.includes("--server"),
   startConfirmMs: Number(argument("confirm-ms")),
 });
 // No top-level await: Electron does not get ready until an ESM main module has run to its end.

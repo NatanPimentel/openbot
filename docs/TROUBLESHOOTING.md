@@ -59,6 +59,18 @@ and sends mouse and keyboard input through the XTest extension. Under Wayland, o
 remote desktop reports that it needs an X11 session. Log in with an Xorg session, or start OpenBot
 under `xvfb-run` on a server. The arm64 AppImage does not include the runtime.
 
+## OpenBot is slow or stops because of the GPU on Linux
+
+On Linux, OpenBot uses the GPU until the GPU fails on your computer. If the GPU process crashes, or a
+start stops in its first 30 seconds, OpenBot writes `gpu-crash.json` or `gpu-start.json` in
+`~/.config/OpenBot`. While one of these files is there, OpenBot renders on the CPU. Dialogs and
+panels with a blurred background are then slower. An update with a new Chromium version tries the
+GPU again. A server (`OPENBOT_SERVER=1` or a hosted server) always renders on the CPU.
+
+- To try the GPU again, for example after a driver update, remove the file. The log names it.
+- To always use the GPU, start OpenBot with `OPENBOT_DISABLE_GPU=0`.
+- If OpenBot stops at each start, start it with `OPENBOT_DISABLE_GPU=1` to always render on the CPU.
+
 ## Computer Use is unavailable
 
 Computer Use needs the `cua-driver` binary. An installed release carries it, so the panel reporting

@@ -177,7 +177,11 @@ app.enableSandbox();
 if (process.platform === "win32") app.setAppUserModelId("app.openbot.desktop");
 const hasSingleInstanceLock = app.requestSingleInstanceLock();
 // Linux: the GPU stays on until it fails on this computer (#992). `userData` has its final path here.
-configureLinuxGpu({ userDataPath: app.getPath("userData"), ownsInstance: hasSingleInstanceLock });
+configureLinuxGpu({
+  userDataPath: app.getPath("userData"),
+  ownsInstance: hasSingleInstanceLock,
+  server: hostedServer !== null || serverMode !== null,
+});
 const appVariant = readAppVariant(process.env.OPENBOT_APP_VARIANT, app.isPackaged);
 if (!app.isPackaged) guardDevelopmentOutput([process.stdout, process.stderr], () => app.quit());
 const appIconPath = resolveAppIconPath({
