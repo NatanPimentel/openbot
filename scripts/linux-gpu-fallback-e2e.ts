@@ -2,7 +2,8 @@
 // 1. A first start uses the GPU. A crash of the real GPU process (SIGSEGV) writes `gpu-crash.json`.
 // 2. The next start uses software rendering. `OPENBOT_DISABLE_GPU=0` uses the GPU again.
 // 3. A crash file from another Chromium major version does not count, and a clean quit removes the start file.
-// 4. A start that is killed before it is confirmed makes the next start use software rendering.
+// 4. A start that is killed before it is confirmed makes the next start use software rendering. A quit
+//    that starts confirms the start, also when the teardown is killed before it ends.
 // 5. `OPENBOT_DISABLE_GPU=1` uses software rendering and writes no start file.
 // 6. A server uses software rendering and writes no start file, also with `OPENBOT_DISABLE_GPU=0`.
 //
@@ -118,6 +119,15 @@ try {
   assert.deepEqual(launch.ready.mode, { hardwareAcceleration: false, reason: "unfinished-start" });
   assert.equal(launch.ready.hardwareAccelerationEnabled, false);
   steps.push({ step: "after unfinished start", ready: launch.ready });
+  await quit(launch);
+  const hung = join(root, "hung-quit");
+  launch = await start(hung, 600_000, {}, ["--hang-on-quit"]);
+  launch.child.stdin?.write("quit\n");
+  await until(() => !existsSync(join(hung, GPU_START_FILE)), "a quit that starts removes the start file");
+  await killTree(launch.ready.pid, launch.exited);
+  launch = await start(hung, 1_000);
+  assert.deepEqual(launch.ready.mode, { hardwareAcceleration: true, reason: "default" });
+  steps.push({ step: "after a killed teardown", ready: launch.ready });
   await quit(launch);
 
   // 5. OPENBOT_DISABLE_GPU=1 always uses software rendering.

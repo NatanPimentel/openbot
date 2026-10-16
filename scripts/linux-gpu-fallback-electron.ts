@@ -23,6 +23,8 @@ const mode = configureLinuxGpu({
   server: process.argv.includes("--server"),
   startConfirmMs: Number(argument("confirm-ms")),
 });
+// `--hang-on-quit`: a teardown that does not end, as when `dev:stop` or the shutdown deadline stops it.
+if (process.argv.includes("--hang-on-quit")) app.on("before-quit", (event) => event.preventDefault());
 // No top-level await: Electron does not get ready until an ESM main module has run to its end.
 void app.whenReady().then(async () => {
   const window = new BrowserWindow({ width: 480, height: 320 });

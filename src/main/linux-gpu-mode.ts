@@ -6,7 +6,7 @@
 // Hardware acceleration now stays on until it fails on this computer. Two files in `userData` keep
 // the evidence, because the main process can stop before it sees the GPU process go:
 // - `gpu-start.json` is written before the app is ready. It is removed when the app has run for
-//   `startConfirmMs`, or when it quits. If the file is there at the next start, that start stopped.
+//   `startConfirmMs`, or when a quit starts. If the file is there at the next start, that start stopped.
 // - `gpu-crash.json` is written when the GPU process crashes.
 // Either file keeps software rendering on at each later start with the same Chromium major version.
 // A new Chromium major version tries the GPU again, because it can fix the driver problem. An Electron
@@ -110,7 +110,8 @@ export function configureLinuxGpu(options: ConfigureLinuxGpuOptions): LinuxGpuMo
   if (mode.reason === "not-linux") return mode;
   if (!mode.hardwareAcceleration) {
     app.disableHardwareAcceleration();
-    if (mode.reason === "gpu-process-crash" || mode.reason === "unfinished-start") {
+    // A second instance can read the start file of a first instance that is still new.
+    if (options.ownsInstance && (mode.reason === "gpu-process-crash" || mode.reason === "unfinished-start")) {
       logger.warn(
         `Software rendering is on because the GPU failed before (${mode.reason}). ` +
           `Remove ${mode.reason === "gpu-process-crash" ? crashPath : startPath} or set OPENBOT_DISABLE_GPU=0 to try the GPU again.`,
@@ -122,7 +123,9 @@ export function configureLinuxGpu(options: ConfigureLinuxGpuOptions): LinuxGpuMo
   writeGpuFailure(startPath, chromiumMajor);
   const confirmStart = () => removeFile(startPath);
   void app.whenReady().then(() => setTimeout(confirmStart, options.startConfirmMs ?? DEFAULT_START_CONFIRM_MS));
-  app.once("will-quit", confirmStart);
+  // Not `will-quit`: it fires only after the teardown, which can take longer than a stop allows
+  // (the shutdown deadline ends with `app.exit`, and `dev:stop` sends SIGKILL after a few seconds).
+  app.once("before-quit", confirmStart);
   app.on("child-process-gone", (_event, details) => {
     if (details.type !== "GPU" || !GPU_FAILURE_REASONS.has(details.reason)) return;
     logger.warn(`The GPU process stopped (${details.reason}, exit code ${details.exitCode}).`);
