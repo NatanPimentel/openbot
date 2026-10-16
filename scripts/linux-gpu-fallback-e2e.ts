@@ -2,6 +2,7 @@
 // 1. A first start uses the GPU. A crash of the real GPU process (SIGSEGV) writes `gpu-crash.json`.
 // 2. The next start uses software rendering. `OPENBOT_DISABLE_GPU=0` uses the GPU again.
 // 3. A crash file from another Chromium major version does not count, and a clean quit removes the start file.
+//    A GPU process exit after a GPU context loss, which Chromium restarts, writes no crash file.
 // 4. A start that is killed before it is confirmed makes the next start use software rendering. A quit
 //    that starts confirms the start, also when the teardown is killed before it ends.
 // 5. `OPENBOT_DISABLE_GPU=1` uses software rendering and writes no start file.
@@ -109,6 +110,15 @@ try {
   await quit(launch);
   assert.equal(existsSync(join(data, GPU_START_FILE)), false, "a clean quit removes the start file");
   steps.push({ step: "crash from another Chromium major version", ready: launch.ready });
+  const contextLost = join(root, "context-lost");
+  launch = await start(contextLost, 1_000, {}, ["--context-lost"]);
+  assert.deepEqual(launch.ready.mode, { hardwareAcceleration: true, reason: "default" });
+  assert.equal(existsSync(join(contextLost, GPU_CRASH_FILE)), false, "a context-loss exit writes no crash file");
+  await quit(launch);
+  launch = await start(contextLost, 1_000);
+  assert.deepEqual(launch.ready.mode, { hardwareAcceleration: true, reason: "default" });
+  steps.push({ step: "after a GPU context loss", ready: launch.ready });
+  await quit(launch);
 
   // 4. A start that stops before it is confirmed (as with SIGTRAP in #992) turns off the GPU.
   const killed = join(root, "killed-start");

@@ -32,6 +32,9 @@ const GPU_FAILURE_REASONS: ReadonlySet<Details["reason"]> = new Set([
   "oom",
   "launch-failed",
 ]);
+// `viz::ExitCode::RESULT_CODE_GPU_EXIT_ON_CONTEXT_LOST`: the GPU process stops on purpose when the GPU
+// context is lost (for example after suspend and resume), and Chromium starts it again.
+const GPU_EXIT_ON_CONTEXT_LOST = 34;
 
 const logger = createOpenBotLogger("linux-gpu");
 
@@ -128,6 +131,7 @@ export function configureLinuxGpu(options: ConfigureLinuxGpuOptions): LinuxGpuMo
   app.once("before-quit", confirmStart);
   app.on("child-process-gone", (_event, details) => {
     if (details.type !== "GPU" || !GPU_FAILURE_REASONS.has(details.reason)) return;
+    if (details.reason === "abnormal-exit" && details.exitCode === GPU_EXIT_ON_CONTEXT_LOST) return;
     logger.warn(`The GPU process stopped (${details.reason}, exit code ${details.exitCode}).`);
     writeGpuFailure(crashPath, chromiumMajor);
   });

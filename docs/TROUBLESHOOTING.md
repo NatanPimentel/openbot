@@ -65,7 +65,8 @@ On Linux, OpenBot uses the GPU until the GPU fails on your computer. If the GPU 
 start stops in its first 30 seconds, OpenBot writes `gpu-crash.json` or `gpu-start.json` in
 `~/.config/OpenBot`. While one of these files is there, OpenBot renders on the CPU. Dialogs and
 panels with a blurred background are then slower. An update with a new Chromium version tries the
-GPU again. A server (`OPENBOT_SERVER=1` or a hosted server) always renders on the CPU.
+GPU again. A GPU process restart after a lost GPU context, for example after suspend, does not
+count. A server (`OPENBOT_SERVER=1` or a hosted server) always renders on the CPU.
 
 - To try the GPU again, for example after a driver update, remove the file. The log names it.
 - To always use the GPU, start OpenBot with `OPENBOT_DISABLE_GPU=0`.

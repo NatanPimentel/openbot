@@ -27,6 +27,11 @@ const mode = configureLinuxGpu({
 if (process.argv.includes("--hang-on-quit")) app.on("before-quit", (event) => event.preventDefault());
 // No top-level await: Electron does not get ready until an ESM main module has run to its end.
 void app.whenReady().then(async () => {
+  // `--context-lost`: the exit of a GPU process that Chromium restarts after a GPU context loss.
+  // A test cannot make the driver lose the context, so it sends the event that Electron sends.
+  if (process.argv.includes("--context-lost")) {
+    app.emit("child-process-gone", {}, { type: "GPU", reason: "abnormal-exit", exitCode: 34 });
+  }
   const window = new BrowserWindow({ width: 480, height: 320 });
   await window.loadURL(
     `data:text/html,${encodeURIComponent(
